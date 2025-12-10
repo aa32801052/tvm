@@ -171,8 +171,13 @@ class ConstantFolder : public ExprMutator {
 
     ffi::Any ret;
     // invoke
-    func.value().CallPacked(ffi::PackedArgs(packed_args.data(), packed_args.size()), &ret);
-    return Constant(ret_tensor);
+    try {
+      func.value().CallPacked(ffi::PackedArgs(packed_args.data(), packed_args.size()), &ret);
+      return Constant(ret_tensor);
+    }
+    catch (const tvm::Error& err) {
+      return std::nullopt;
+    }
   }
 
   // Returns the folded expr if the call is successfully folded to constant, otherwise null.
