@@ -35,6 +35,11 @@ namespace runtime {
 
 inline void VerifyDataType(DLDataType dtype) {
   ICHECK_GE(dtype.lanes, 1);
+  if (dtype.code >= DataType::kCustomBegin) {
+    // Custom BYODT dtypes may use non-byte-aligned logical bits (e.g. posit9)
+    // and rely on lowering to byte-addressable storage containers.
+    return;
+  }
   if (dtype.code == kDLFloat) {
     ICHECK_EQ(dtype.bits % 8, 0);
   } else {

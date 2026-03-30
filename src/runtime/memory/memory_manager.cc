@@ -44,6 +44,11 @@ Storage::Storage(Buffer buffer, Allocator* allocator) {
 
 inline void VerifyDataType(DLDataType dtype) {
   ICHECK_GE(dtype.lanes, 1);
+  if (dtype.code >= DataType::kCustomBegin) {
+    // Custom BYODT dtypes may use non-byte-aligned logical bits (e.g. posit9)
+    // and rely on lowering to byte-addressable storage containers.
+    return;
+  }
   if (dtype.code == kDLFloat) {
     ICHECK_EQ(dtype.bits % 8, 0);
   } else {
@@ -55,7 +60,16 @@ inline void VerifyDataType(DLDataType dtype) {
 }
 
 inline size_t GetDataAlignment(const DLDataType& dtype) {
-  size_t align = dtype.lanes * dtype.bits / 8;
+  size_t align = 0;
+  if (dtype.code >= DataType::kCustomBegin) {
+    size_t bytes_per_lane = ((dtype.bits + 7) / 8);
+    if (dtype.bits >= 17 && dtype.bits <= 24) {
+      bytes_per_lane = 4;
+    }
+    align = dtype.lanes * bytes_per_lane;
+  } else {
+    align = dtype.lanes * dtype.bits / 8;
+  }
   if (align < kAllocAlignment) return kAllocAlignment;
   return align;
 }

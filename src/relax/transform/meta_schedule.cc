@@ -73,7 +73,8 @@ class MetaScheduleTuner {
   tvm::ffi::Function normalize_mod_func_;
 };
 
-Pass MetaScheduleApplyDatabase(ffi::Optional<ffi::String> work_dir, bool enable_warning = false) {
+// Pass MetaScheduleApplyDatabase(ffi::Optional<ffi::String> work_dir, bool enable_warning = false) {
+Pass MetaScheduleApplyDatabase(ffi::Optional<ffi::String> work_dir, ffi::Optional<IRModule> dyn_mod, bool enable_warning = false) { // user add
   using tvm::meta_schedule::Database;
   Target target = Target::Current(false);
   const std::optional<tvm::ffi::Function> normalize_mod_func_ =
@@ -93,9 +94,11 @@ Pass MetaScheduleApplyDatabase(ffi::Optional<ffi::String> work_dir, bool enable_
       database = meta_schedule::Database::JSONDatabase(path_workload, path_tuning_record, true);
     }
 
+    IRModule target_mod = dyn_mod.defined() ? dyn_mod.value() : mod; // user add
     ffi::Map<GlobalVar, BaseFunc> result;
     auto mod_eq_structural = meta_schedule::ModuleEquality::Create("ignore-tensor");
-    for (const auto& iter : mod->functions) {
+    // for (const auto& iter : mod->functions) {
+    for (const auto& iter : target_mod->functions) { // user add
       GlobalVar gv = iter.first;
       BaseFunc base_func = iter.second;
       if (const auto* prim_func_node = base_func.as<tir::PrimFuncNode>()) {
@@ -115,9 +118,22 @@ Pass MetaScheduleApplyDatabase(ffi::Optional<ffi::String> work_dir, bool enable_
                 /*error_render_level=*/tir::ScheduleErrorRenderLevel::kDetail);
             meta_schedule::ScheduleUsingAnchorTrace(sch, record->trace, target);
           } else {
-            sch = tir::Schedule::Traced(
-                record->workload->mod, /*seed=*/-1, /*debug_mask=*/0,
+            if(dyn_mod.defined()) { // user add start
+              IRModule tmp = dyn_mod.value();
+              base_func = tmp->functions[tmp->global_var_map_[gv->name_hint]];
+              if (const auto* prim_func_node = base_func.as<tir::PrimFuncNode>()) {
+                prim_func = ffi::GetRef<tir::PrimFunc>(prim_func_node);
+                tir_mod = (*normalize_mod_func_)(prim_func).cast<IRModule>();
+              }
+              sch = tir::Schedule::Traced(
+                tir_mod, /*seed=*/-1, /*debug_mask=*/0,
                 /*error_render_level=*/tir::ScheduleErrorRenderLevel::kDetail);
+            }
+            else { // user add end
+              sch = tir::Schedule::Traced(
+                  record->workload->mod, /*seed=*/-1, /*debug_mask=*/0,
+                  /*error_render_level=*/tir::ScheduleErrorRenderLevel::kDetail);
+            }
             record->trace->ApplyToSchedule(sch, /*remove_postproc=*/false);
           }
           IRModule new_mod = sch->mod();
@@ -138,8 +154,15 @@ Pass MetaScheduleApplyDatabase(ffi::Optional<ffi::String> work_dir, bool enable_
           LOG(WARNING) << "Tuning record is not found for primfunc: " << gv->name_hint;
         }
       }
+      if(dyn_mod.defined()) { // user add start
+        IRModule tmp = dyn_mod.value();
+        base_func = tmp->functions[tmp->global_var_map_[gv->name_hint]];
+      } // user add end
       result.Set(gv, base_func);
     }
+    if(dyn_mod.defined()) { // user add start
+        mod = dyn_mod.value();
+    } // user add end
     return IRModule(result,       // functions
                     {},           // map
                     mod->attrs);  // attrs);

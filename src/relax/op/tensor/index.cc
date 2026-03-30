@@ -47,7 +47,7 @@ TVM_FFI_STATIC_INIT_BLOCK() {
 Expr take(Expr x, Expr indices, ffi::Optional<int64_t> axis, ffi::String mode) {
   ObjectPtr<TakeAttrs> attrs = ffi::make_object<TakeAttrs>();
   attrs->axis = std::move(axis);
-  attrs->mode = std::move(mode);
+  // attrs->mode = std::move(mode);
 
   static const Op& op = Op::Get("relax.take");
   return Call(op, {std::move(x), std::move(indices)}, Attrs(attrs), {});

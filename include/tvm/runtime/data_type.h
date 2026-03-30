@@ -424,6 +424,13 @@ inline int GetVectorBytes(DataType dtype) {
       dtype == DataType::Float6E2M3FN() || dtype == DataType::Float6E3M2FN()) {
     return 1;
   }
+
+  // BYODT/custom dtypes are commonly lowered to byte-addressable container types
+  // (e.g. custom[posit]9 uses uint16 storage), so permit non-8-divisible logical bits.
+  if (dtype.code() >= DataType::kCustomBegin) {
+    return dtype.bytes() * dtype.lanes();
+  }
+
   ICHECK_EQ(data_bits % 8, 0U) << "Need to load/store by multiple of bytes";
   return data_bits / 8;
 }

@@ -1,5 +1,6 @@
 import numpy as np
 import tvm
+import re
 from tvm.script import ir as I
 from tvm.script import relax as R
 from tvm.relax.frontend.torch import from_exported_program
@@ -8,16 +9,14 @@ from tvm.contrib.download import download_testdata
 import torch
 from torch.export import export
 from torchvision.models.resnet import ResNet18_Weights, resnet18
-import os, sys
 from tvm.relax.frontend.change_datatype import ChangeDatatype
+from sch_handed import optimize_ir_module
 from PIL import Image
 import time
-from sch_handed import add_parallel_directives_to_all_functions
-from register import _posit_registered
+from register import ensure_posit_registered_for_dtype
 from tvm.relax.transform import ToMixedPrecision
 
-
-_posit_registered()
+TARGET = "llvm"
 
 def get_cat_image(): # Download and preprocess a cat image for testing
     url = "https://gist.githubusercontent.com/zhreshold/bcda4716699ac97ea44f791c24310193/raw/fa7ef0e9c9a5daea686d6473a62aacd1a5885849/cat.png"
@@ -44,44 +43,51 @@ def export_resnet18():
     relax_module = relax.transform.DecomposeOpsForInference()(relax_module)
     return relax_module, params
 
-def convert_ndarray_in_relax(dst_dtype, array, dev=tvm.cpu(), target="llvm"):
-    """
-    Convert numpy.ndarray or tvm.nd.NDArray to target dtype using Relax.
-    
-    This function handles:
-    - Lists and dicts (recursively converts each element)
-    - TVM NDArrays with custom dtypes (avoids numpy conversion)
-    - Standard numpy arrays and TVM NDArrays
-    """
-    # Handle list/dict of arrays (for params that might be structured)
+def _parse_posit_dtype(dtype: str):
+    match = re.search(r"custom\[posites(\d+)\](\d+)", dtype)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def convert_ndarray_in_relax(dst_dtype, array, dev=tvm.cpu(), target=TARGET):
+    """Convert numpy.ndarray or tvm.nd.NDArray to target dtype using Relax or posit converter"""
+
     if isinstance(array, list):
         return [convert_ndarray_in_relax(dst_dtype, v, dev, target) for v in array]
     if isinstance(array, dict):
         return {k: convert_ndarray_in_relax(dst_dtype, v, dev, target) for k, v in array.items()}
     
-    # Determine source array and dtype
-    if hasattr(array, 'dtype') and 'custom' in str(array.dtype):
-        # For custom dtypes in TVM NDArray, use directly without numpy conversion
+    if hasattr(array, "dtype") and hasattr(array, "shape") and not isinstance(array, np.ndarray):
         src_array = array
-        src_dtype = str(array.dtype)
+        src_dtype = str(src_array.dtype)
+        array_np = None
+    elif isinstance(array, np.ndarray):
+        array_np = array
+        src_array = None
+        src_dtype = None
     else:
-        # Convert to numpy array first
-        if isinstance(array, np.ndarray):
-            array_np = array
-        else:
-            array_np = array.numpy() if hasattr(array, 'numpy') else np.array(array)
-        
-        # Ensure we have a valid numeric dtype
+        array_np = array.numpy() if hasattr(array, 'numpy') else np.array(array)
+        src_array = None
+        src_dtype = None
+    
+    # Handle posit conversion
+    posit_spec = _parse_posit_dtype(dst_dtype)
+    if posit_spec is not None:
+        ensure_posit_registered_for_dtype(dst_dtype)
+    
+    # Standard type conversion
+    if src_array is None and hasattr(array_np, 'dtype'):
         if array_np.dtype == object or array_np.dtype.kind not in ['f', 'i', 'u']:
             try:
                 array_np = array_np.astype(np.float32)
             except (ValueError, TypeError):
                 raise ValueError(f"Cannot convert array with dtype {array_np.dtype} to numeric type")
-        
+
+    if src_array is None:
         src_array = tvm.runtime.tensor(array_np, dev)
         src_dtype = str(src_array.dtype)
     
-    # Build and execute conversion module
     shape = src_array.shape
     mod = IRModule()
     x = relax.Var("x", relax.TensorStructInfo(shape=shape, dtype=src_dtype))
@@ -101,6 +107,7 @@ def ChangeDatatypeInRelaxAndParams(mod: tvm.IRModule, params: dict, src_dtype: s
     """
     # new_main = ChangeDatatype(src_dtype, dst_dtype)(mod)
     # new_mod = IRModule({"main": new_main["main"]})
+
     dtype_mutator = ChangeDatatype(src_dtype, dst_dtype, mod)
     new_main = dtype_mutator.visit_expr(mod["main"])
     new_mod = IRModule({"main": new_main})
@@ -142,35 +149,27 @@ def benchmark_inference_float32():
     rt_mod = relax.build(mod, target=target)
     vm = relax.VirtualMachine(rt_mod, dev)
     input_data = tvm.runtime.tensor(input_data, dev)
-    print(params)
+    # print(params)
     output = vm["main"](input_data, *params["main"])
     return output
 
 def main():
     src_dtype = "float32"
-    dst_dtype = "custom[posites2]32"
-    # dst_dtype = "float16"
-
-    mod, params = export_resnet18()
-    # # mod = ToMixedPrecision(out_dtype="float16")(mod)
-    # print(mod)
-    # mod, params = ChangeDatatypeInRelaxAndParams(mod, params, src_dtype=src_dtype, dst_dtype=dst_dtype)  # Change data type to posit
-    # mod, params = ChangeDatatypeInRelaxAndParams(mod, params, src_dtype="float32", dst_dtype="float16")  # Change data type to posit
-
-    # mod = tvm.relax.pipeline.get_pipeline()(mod) # Lower to TIR
-    # shc = add_parallel_directives_to_all_functions(mod)  # Add parallel directives to all functions
-    # # print(shc)
-    # input_data = convert_ndarray_in_relax(dst_dtype=dst_dtype, array= get_cat_image())
+    dst_dtype = "custom[posites0]3"
+    ensure_posit_registered_for_dtype(dst_dtype)
     input_data = get_cat_image()
-    start_time = time.time()
-    output = run_inference(mod, params, input_data , target="llvm")  # Run inference
-    end_time = time.time()
-    print("Total Time (Build + Inference):", end_time - start_time, "seconds")
-    # output = convert_ndarray_in_relax("float32", output[0])
-    # print("Output:\n", output)
-    # float32_out = benchmark_inference_float32()[0]
-    # np.testing.assert_allclose(
-    #     float32_out.numpy(), output.numpy(), rtol=1e-5, atol=1e-5
-    # )
+    input_data = convert_ndarray_in_relax(dst_dtype=dst_dtype, array= get_cat_image())
+    mod, params = export_resnet18()
+    mod, params = ChangeDatatypeInRelaxAndParams(mod, params, src_dtype, dst_dtype)
+    mod = tvm.relax.pipeline.get_pipeline()(mod)
+    mod = optimize_ir_module(mod)
+    # print(mod)
+    output = run_inference(mod, params, input_data , target="llvm")
+    output_f32 = convert_ndarray_in_relax(dst_dtype="float32", array=output[0])
+    # print(output_f32)
+    float32_out = benchmark_inference_float32()[0]
+    np.testing.assert_allclose(
+        float32_out.numpy(), output_f32.numpy(), rtol=1e-8, atol=1e-8
+    )
 if __name__ == "__main__":
     main()
