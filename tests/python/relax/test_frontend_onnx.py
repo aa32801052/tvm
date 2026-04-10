@@ -15,13 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 # pylint: disable=unused-argument
+# ruff: noqa: E501, F841
 """
 ONNX testcases
 ================
 This file is a test script to test Relax ONNX frontend coverage.
 """
 
-from typing import Dict, List, Literal, Optional
+from typing import Literal
 
 import numpy as np
 import onnx
@@ -33,17 +34,17 @@ import tvm
 import tvm.testing
 from tvm import relax
 from tvm.relax.frontend.onnx import from_onnx
+from tvm.script import ir as I
 from tvm.script import relax as R
 from tvm.script import tir as T
-from tvm.script import ir as I
 
 bg = np.random.MT19937(0)
 rg = np.random.Generator(bg)
 
 
 def generate_random_inputs(
-    model: ModelProto, inputs: Optional[Dict[str, np.ndarray]] = None
-) -> Dict[str, np.ndarray]:
+    model: ModelProto, inputs: dict[str, np.ndarray] | None = None
+) -> dict[str, np.ndarray]:
     input_values = {}
     # Iterate through model inputs and extract their shape.
     for i in model.graph.input:
@@ -82,7 +83,7 @@ def generate_random_value(shape, elem_type) -> np.ndarray:
 
 def check_correctness(
     model: ModelProto,
-    inputs: Optional[Dict[str, np.ndarray]] = None,
+    inputs: dict[str, np.ndarray] | None = None,
     ir_version: int = 8,
     opset: int = 14,
     rtol: float = 1e-7,
@@ -168,7 +169,7 @@ def check_correctness(
             return "other"
 
     def _check_output(tvm_out, ort_out):
-        if isinstance(tvm_out, tuple) and isinstance(ort_out, (tvm.runtime.ShapeTuple, list)):
+        if isinstance(tvm_out, tuple) and isinstance(ort_out, tvm.runtime.ShapeTuple | list):
             assert len(tvm_out) == len(ort_out), "Unequal number of outputs"
             for tvm_out_i, ort_out_i in zip(tvm_out, ort_out):
                 _check_output(tvm_out_i, ort_out_i)
@@ -181,7 +182,7 @@ def check_correctness(
             if check_dtypes:
                 assert _get_numpy_subdtype(shape_out.numpy()) == _get_numpy_subdtype(ort_out)
             tvm.testing.assert_allclose(shape_out.numpy(), ort_out, rtol=rtol, atol=atol)
-        elif isinstance(tvm_out, (int, float, bool)) and isinstance(ort_out, np.ndarray):
+        elif isinstance(tvm_out, int | float | bool) and isinstance(ort_out, np.ndarray):
             if check_dtypes:
                 assert _get_numpy_subdtype(np.array(tvm_out)) == _get_numpy_subdtype(ort_out)
             tvm.testing.assert_allclose(np.array(tvm_out), ort_out, rtol=rtol, atol=atol)
@@ -393,22 +394,53 @@ def test_mod(int_mode: bool):
     verify_binary_scalar("Mod", attrs={"fmod": fmod}, dtype=dtype)
 
 
-@pytest.mark.parametrize("num_inputs", [1, 2, 4])
+SHAPE_PARAMS = [
+    ([[32, 32], [32, 32]], [32, 32]),
+    ([[32, 1], [1, 2]], [32, 2]),
+    (
+        [
+            [
+                32,
+            ],
+            [
+                1,
+            ],
+        ],
+        [
+            32,
+        ],
+    ),
+    ([[32, 32, 1, 1], [1, 32, 32]], [32, 32, 32, 32]),
+    (
+        [
+            [32, 32, 1, 1],
+            [1, 32, 1],
+            [
+                32,
+            ],
+        ],
+        [32, 32, 32, 32],
+    ),
+]
+
+
+@pytest.mark.parametrize("input_shapes, expected_output_shape", SHAPE_PARAMS)
 @pytest.mark.parametrize("op_name", ["Min", "Max", "Sum", "Mean"])
-def test_multi_input(op_name: str, num_inputs: int):
-    input_shape = [32, 32]
-    input_var = ["i" + str(i) for i in range(num_inputs)]
-    input_values = [
-        helper.make_tensor_value_info(var, TensorProto.FLOAT, input_shape) for var in input_var
-    ]
-    test_node = helper.make_node(op_name, input_var, ["c"])
+def test_multi_input_broadcasting(op_name, input_shapes, expected_output_shape):
+    num_inputs = len(input_shapes)
+    input_names = [f"i{i}" for i in range(num_inputs)]
+
+    input_values_info = []
+    for name, shape in zip(input_names, input_shapes):
+        input_values_info.append(helper.make_tensor_value_info(name, TensorProto.FLOAT, shape))
+    test_node = helper.make_node(op_name, input_names, ["output"])
+    output_info = helper.make_tensor_value_info("output", TensorProto.FLOAT, expected_output_shape)
     graph = helper.make_graph(
         [test_node],
-        "multi_input_test",
-        inputs=input_values,
-        outputs=[helper.make_tensor_value_info("c", TensorProto.FLOAT, input_shape)],
+        f"multi_input_{op_name}_test",
+        inputs=input_values_info,
+        outputs=[output_info],
     )
-
     model = helper.make_model(graph, producer_name="multi_input_test")
     check_correctness(model)
 
@@ -535,7 +567,7 @@ def test_gather():
     def _verify_gather(data_shape, indices, out_shape, axis=0):
         gather_node = helper.make_node("Gather", ["data", "indices"], ["y"], axis=axis)
 
-        if isinstance(indices, (list, tuple)):
+        if isinstance(indices, list | tuple):
             indices_shape = np.asarray(indices).shape
         else:
             indices_shape = []
@@ -685,9 +717,9 @@ def test_scatter_nd(reduction):
 @pytest.mark.parametrize("condition_shape", [None, [8], [16]])
 @pytest.mark.parametrize("axis", [None, 0, 1])
 def test_compress(
-    tensor_shape: List[int],
-    condition_shape: Optional[List[int]],
-    axis: Optional[int],
+    tensor_shape: list[int],
+    condition_shape: list[int] | None,
+    axis: int | None,
 ):
     if condition_shape is None and axis is None:
         pytest.skip("Either condition_shape or axis must be specified")
@@ -789,6 +821,74 @@ def test_transpose():
     verify_unary("Transpose", [32, 32, 32], attrs={"perm": [1, 2, 0]})
 
 
+def test_transpose_scalar():
+    """Test Transpose with scalar inputs - should return scalar unchanged."""
+    # Test scalar with no perm attribute (default behavior)
+    scalar_node = helper.make_node("Transpose", ["x"], ["y"])
+    graph = helper.make_graph(
+        [scalar_node],
+        "transpose_scalar_test",
+        inputs=[helper.make_tensor_value_info("x", TensorProto.FLOAT, [])],
+        outputs=[helper.make_tensor_value_info("y", TensorProto.FLOAT, [])],
+    )
+    model = helper.make_model(graph, producer_name="transpose_scalar_test")
+    check_correctness(model)
+
+    # Test with scalar constant and transpose without perm
+    scalar_constant = helper.make_node(
+        "Constant",
+        [],
+        ["scalar"],
+        value=helper.make_tensor("value", TensorProto.FLOAT, [], [5.0]),
+    )
+
+    transpose_node = helper.make_node("Transpose", ["scalar"], ["y"])
+    graph = helper.make_graph(
+        [scalar_constant, transpose_node],
+        "transpose_scalar_constant_test",
+        inputs=[],
+        outputs=[helper.make_tensor_value_info("y", TensorProto.FLOAT, [])],
+    )
+    model = helper.make_model(graph, producer_name="transpose_scalar_constant_test")
+    check_correctness(model)
+
+
+def test_transpose_axes_validation():
+    """Test Transpose validation - perm axes count must match tensor dimensions"""
+    # Test 1D tensor with correct perm
+    transpose_1d_valid = helper.make_node("Transpose", ["x"], ["y"], perm=[0])
+    graph_1d_valid = helper.make_graph(
+        [transpose_1d_valid],
+        "transpose_1d_valid_test",
+        inputs=[helper.make_tensor_value_info("x", TensorProto.FLOAT, [10])],
+        outputs=[helper.make_tensor_value_info("y", TensorProto.FLOAT, [10])],
+    )
+    model_1d_valid = helper.make_model(graph_1d_valid, producer_name="transpose_1d_valid_test")
+    check_correctness(model_1d_valid)
+
+    # Test 2D tensor with correct perm
+    transpose_2d_valid = helper.make_node("Transpose", ["x"], ["y"], perm=[1, 0])
+    graph_2d_valid = helper.make_graph(
+        [transpose_2d_valid],
+        "transpose_2d_valid_test",
+        inputs=[helper.make_tensor_value_info("x", TensorProto.FLOAT, [3, 4])],
+        outputs=[helper.make_tensor_value_info("y", TensorProto.FLOAT, [4, 3])],
+    )
+    model_2d_valid = helper.make_model(graph_2d_valid, producer_name="transpose_2d_valid_test")
+    check_correctness(model_2d_valid)
+
+    # Test 3D tensor with correct perm
+    transpose_3d_valid = helper.make_node("Transpose", ["x"], ["y"], perm=[2, 0, 1])
+    graph_3d_valid = helper.make_graph(
+        [transpose_3d_valid],
+        "transpose_3d_valid_test",
+        inputs=[helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 3, 4])],
+        outputs=[helper.make_tensor_value_info("y", TensorProto.FLOAT, [4, 2, 3])],
+    )
+    model_3d_valid = helper.make_model(graph_3d_valid, producer_name="transpose_3d_valid_test")
+    check_correctness(model_3d_valid)
+
+
 def test_unsqueeze():
     unsqueeze_node = helper.make_node("Unsqueeze", ["a", "axes"], ["b"])
 
@@ -822,6 +922,14 @@ def test_unsqueeze_v1():
 
 def test_gelu():
     verify_unary("Gelu", [32, 32], domain="com.microsoft")
+
+
+def test_gelu_approximate():
+    """Test Gelu with approximate attribute from ONNX Opset 20."""
+    # Test Gelu with approximate="tanh"
+    verify_unary("Gelu", [32, 32], attrs={"approximate": "tanh"}, opset=20)
+    # Test Gelu with approximate="none" (default, same as standard Gelu)
+    verify_unary("Gelu", [32, 32], attrs={"approximate": "none"}, opset=20)
 
 
 def test_bias_gelu():
@@ -1000,6 +1108,9 @@ def test_mish():
 
 def test_prelu():
     verify_binary("PRelu", [3, 32, 32], [1], [3, 32, 32])
+    verify_binary("PRelu", [3, 32, 32], [1, 1], [3, 32, 32])
+    verify_binary("PRelu", [3, 32, 32], [32], [3, 32, 32])
+    verify_binary("PRelu", [3, 32, 32], [3, 1, 1], [3, 32, 32])
 
 
 def test_thresholded_relu():
@@ -1103,15 +1214,20 @@ def test_conv(stride: int, dilation: int, pad: int, bias: bool, auto_pad: str):
     _verify_conv([3, 4, 32, 32, 32], [2, 4, 3, 3, 3])  # group=2
 
 
-@pytest.mark.parametrize("stride", [1, 2])
+@pytest.mark.parametrize("stride", [2])
 @pytest.mark.parametrize("dilation", [1])
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("pad", [0, 2])
-def test_conv_transpose(stride: int, dilation: int, pad: int, bias: bool):
+@pytest.mark.parametrize("output_pad", [0, 1])
+def test_conv_transpose(stride: int, dilation: int, pad: int, bias: bool, output_pad: int):
     def _verify_conv_transpose(input_shape, weight_shape):
         nd = len(weight_shape) - 2
         output_shape = [input_shape[0], weight_shape[0]] + [
-            (input_shape[i] - 1) * stride - 2 * pad + dilation * (weight_shape[i] - 1) + 1
+            (input_shape[i] - 1) * stride
+            - 2 * pad
+            + dilation * (weight_shape[i] - 1)
+            + output_pad
+            + 1
             for i in range(2, len(input_shape))
         ]
         bias_shape = [output_shape[1]]
@@ -1122,6 +1238,7 @@ def test_conv_transpose(stride: int, dilation: int, pad: int, bias: bool):
             strides=[stride] * nd,
             dilations=[dilation] * nd,
             pads=[pad] * nd * 2,
+            output_padding=[output_pad] * nd,
             group=input_shape[1] // weight_shape[1],
         )
         graph = helper.make_graph(
@@ -1144,6 +1261,9 @@ def test_conv_transpose(stride: int, dilation: int, pad: int, bias: bool):
     # ConvTranspose2D
     _verify_conv_transpose([3, 4, 32, 32], [4, 4, 3, 3])
     _verify_conv_transpose([3, 4, 32, 32], [4, 2, 3, 3])  # group=2
+    # ConvTranspose3D
+    _verify_conv_transpose([3, 4, 12, 12, 12], [4, 4, 3, 3, 3])
+    _verify_conv_transpose([3, 4, 12, 12, 12], [4, 2, 3, 3, 3])  # group=2
 
 
 def test_pow():
@@ -1600,6 +1720,33 @@ def test_embedlayernormalization():
     )
 
 
+def test_local_response_norm():
+    lrn_node = helper.make_node(
+        op_type="LRN",
+        inputs=["input"],
+        outputs=["output"],
+        name="LRN_Node",
+        alpha=0.0001,
+        beta=0.75,
+        bias=1.0,
+        size=3,
+    )
+
+    graph = helper.make_graph(
+        [lrn_node],
+        "local_response_norm_test",
+        inputs=[
+            helper.make_tensor_value_info("input", TensorProto.FLOAT, [1, 3, 32, 32]),
+        ],
+        outputs=[
+            helper.make_tensor_value_info("output", TensorProto.FLOAT, [1, 3, 32, 32]),
+        ],
+    )
+
+    model = helper.make_model(graph, producer_name="local_response_norm_test")
+    check_correctness(model)
+
+
 def create_reduce_test_parameters_axes_attr():
     output = []
     for value in [True, False]:
@@ -1976,9 +2123,9 @@ def test_expand_incompatible_broadcasting():
             from_onnx(model, keep_params_in_input=True)
 
         error_msg = str(exc_info.value)
-        assert (
-            "broadcast" in error_msg.lower() or "incompatible" in error_msg.lower()
-        ), f"Expected broadcasting error, but got: {error_msg}"
+        assert "broadcast" in error_msg.lower() or "incompatible" in error_msg.lower(), (
+            f"Expected broadcasting error, but got: {error_msg}"
+        )
 
     # Test case 1: Reproduce the exact error from the issue-17769
     # Input shape: (25,), target shape: (1, 1, 1, 56)
@@ -2372,6 +2519,8 @@ def test_pad(dynamic):
     verify_pad((2, 3), [1, 0, 0, 1], "constant", 0.0)
     verify_pad((3, 2), [0, 0, 1, 0], "constant", 5.0)
     verify_pad((1, 3, 4, 5), [0, 1, 1, 1, 0, 0, 1, 1], "reflect")
+    verify_pad((2, 3), [1, 1, 1, 1], "edge")
+    verify_pad((1, 3, 4, 5), [0, 1, 1, 1, 0, 0, 1, 1], "edge")
 
 
 @pytest.mark.parametrize("dynamic", [True, False])
@@ -2428,6 +2577,8 @@ def test_pad_v2(dynamic):
     verify_pad((2, 3), [1, 0, 0, 1], "constant", 0.0)
     verify_pad((3, 2), [0, 0, 1, 0], "constant", 5.0)
     verify_pad((1, 3, 4, 5), [0, 1, 1, 1, 0, 0, 1, 1], "reflect")
+    verify_pad((2, 3), [1, 1, 1, 1], "edge")
+    verify_pad((1, 3, 4, 5), [0, 1, 1, 1, 0, 0, 1, 1], "edge")
 
 
 @pytest.mark.parametrize("fp_arith", [np.float16, np.float32])
@@ -2556,14 +2707,46 @@ def test_tile(dynamic):
     verify_tile(x.shape, repeats, z_array.shape)
 
 
+@pytest.mark.parametrize("dynamic_input", [True, False])
+@pytest.mark.parametrize(
+    "in_shape,repeats",
+    [
+        ((2, 3), np.array([2, 2], dtype=np.int64)),
+        ((2, 3, 4), np.array([2, 2, 1], dtype=np.int64)),
+        ((2, 3, 4, 5), np.array([1, 2, 1, 2], dtype=np.int64)),
+    ],
+)
+def test_tile_dynamic_repeats(dynamic_input, in_shape, repeats):
+    x = np.random.rand(*in_shape).astype(np.float32)
+    out_shape = np.tile(x, repeats).shape
+
+    input_shape = ["?" for _ in in_shape] if dynamic_input else list(x.shape)
+    output_shape = ["?" for _ in out_shape] if dynamic_input else list(out_shape)
+
+    node = helper.make_node("Tile", inputs=["input", "repeats"], outputs=["out"])
+    graph = helper.make_graph(
+        [node],
+        "tile_dynamic_repeats_test",
+        inputs=[
+            helper.make_tensor_value_info("input", TensorProto.FLOAT, input_shape),
+            helper.make_tensor_value_info("repeats", TensorProto.INT64, [len(repeats)]),
+        ],
+        outputs=[helper.make_tensor_value_info("out", TensorProto.FLOAT, output_shape)],
+    )
+    model = helper.make_model(graph, producer_name="tile_dynamic_repeats_test")
+
+    check_correctness(model, inputs={"input": x, "repeats": repeats}, opset=13)
+
+
 def _generate_roi_cases():
     # Base case when with_roi is False
     roi_list = [
-        pytest.param(False, None, id="no_roi"),
+        pytest.param(False, None, False, id="no_roi"),
     ]
 
-    # Valid when with_roi is True
+    # Valid when with_roi is True and with_constant is True/False
     roi_cases = [
+        [],
         [0.0, 0.0, 0.0, 0.0],
         [0.0, 0.0, 1.0, 1.0],
         [0.1, 0.1, 0.9, 0.9],
@@ -2574,27 +2757,51 @@ def _generate_roi_cases():
         [0.1, 0.2, 0.9, 0.8],
     ]
     for roi in roi_cases:
-        roi_list.append(pytest.param(True, roi, id=f"roi_{'_'.join(str(x) for x in roi)}"))
+        roi_list.append(pytest.param(True, roi, True, id=f"roi_{'_'.join(str(x) for x in roi)}"))
+        roi_list.append(pytest.param(True, roi, False, id=f"roi_{'_'.join(str(x) for x in roi)}"))
 
     return roi_list
 
 
-@pytest.mark.parametrize("with_roi, roi_list", _generate_roi_cases())
-def test_resize(with_roi, roi_list):
+@pytest.mark.parametrize("with_roi, roi_list, with_constant", _generate_roi_cases())
+def test_resize(with_roi, roi_list, with_constant):
+    nodes = []
     resize_node = helper.make_node(
         "Resize", ["X", "roi" if with_roi else "", "scales"], ["Y"], mode="cubic"
     )
 
+    if with_roi and with_constant:
+        roi_tensor = helper.make_tensor(
+            name="roi",
+            data_type=TensorProto.FLOAT,
+            dims=[len(roi_list)],
+            vals=roi_list,
+        )
+
+        roi_const_node = helper.make_node(
+            "Constant",
+            inputs=[],
+            outputs=["roi"],
+            value=roi_tensor,
+        )
+        nodes.append(roi_const_node)
+
+    nodes.append(resize_node)
+
+    initializers = [
+        helper.make_tensor("scales", TensorProto.FLOAT, [4], [1.0, 1.0, 2.0, 2.0]),
+    ]
+
+    if with_roi and not with_constant:
+        initializers.append(helper.make_tensor("roi", TensorProto.FLOAT, [len(roi_list)], roi_list))
+
     graph = helper.make_graph(
-        [resize_node],
+        nodes,
         "resize_test",
         inputs=[
             helper.make_tensor_value_info("X", TensorProto.FLOAT, [1, 3, 32, 32]),
         ],
-        initializer=[
-            helper.make_tensor("scales", TensorProto.FLOAT, [4], [1.0, 1.0, 2.0, 2.0]),
-            *([helper.make_tensor("roi", TensorProto.FLOAT, [4], roi_list)] if with_roi else []),
-        ],
+        initializer=initializers,
         outputs=[
             helper.make_tensor_value_info("Y", TensorProto.FLOAT, [1, 3, 64, 64]),
         ],
@@ -2602,6 +2809,72 @@ def test_resize(with_roi, roi_list):
 
     model = helper.make_model(graph, producer_name="resize_test")
     check_correctness(model)
+
+
+def test_resize_nd_sizes():
+    cases = [
+        ("resize1d", [1, 1, 4], [1, 1, 7]),
+        ("resize2d", [1, 1, 4, 5], [1, 1, 6, 7]),
+        ("resize3d", [1, 1, 3, 4, 5], [1, 1, 4, 6, 7]),
+    ]
+
+    for name, input_shape, sizes in cases:
+        resize_node = helper.make_node(
+            "Resize",
+            ["X", "", "", "sizes"],
+            ["Y"],
+            mode="nearest",
+            coordinate_transformation_mode="asymmetric",
+            nearest_mode="floor",
+        )
+
+        graph = helper.make_graph(
+            [resize_node],
+            name,
+            inputs=[
+                helper.make_tensor_value_info("X", TensorProto.FLOAT, input_shape),
+            ],
+            initializer=[
+                helper.make_tensor("sizes", TensorProto.INT64, [len(sizes)], sizes),
+            ],
+            outputs=[
+                helper.make_tensor_value_info("Y", TensorProto.FLOAT, sizes),
+            ],
+        )
+
+        model = helper.make_model(graph, producer_name=name)
+        check_correctness(model, opset=18)
+
+
+def test_resize_5d_emits_relax_resize3d():
+    resize_node = helper.make_node(
+        "Resize",
+        ["X", "", "", "sizes"],
+        ["Y"],
+        mode="nearest",
+        coordinate_transformation_mode="asymmetric",
+        nearest_mode="floor",
+    )
+    graph = helper.make_graph(
+        [resize_node],
+        "resize3d_ir_check",
+        inputs=[helper.make_tensor_value_info("X", TensorProto.FLOAT, [1, 1, 3, 4, 5])],
+        initializer=[helper.make_tensor("sizes", TensorProto.INT64, [5], [1, 1, 4, 6, 7])],
+        outputs=[helper.make_tensor_value_info("Y", TensorProto.FLOAT, [1, 1, 4, 6, 7])],
+    )
+    model = helper.make_model(graph, producer_name="resize3d_ir_check")
+    tvm_model = from_onnx(model, opset=18, keep_params_in_input=True)
+
+    seen_resize3d = False
+
+    def _visit(expr):
+        nonlocal seen_resize3d
+        if isinstance(expr, relax.Call) and isinstance(expr.op, tvm.ir.Op):
+            if expr.op.name == "relax.image.resize3d":
+                seen_resize3d = True
+
+    relax.analysis.post_order_visit(tvm_model["main"].body, _visit)
+    assert seen_resize3d
 
 
 def test_einsum():
@@ -2704,11 +2977,11 @@ def test_batch_norm():
 )
 def test_pool(
     pool_name: str,
-    shape: List[int],
+    shape: list[int],
     auto_pad: str,
-    kernel_shape: List[int],
-    strides: List[int],
-    pads: List[int],
+    kernel_shape: list[int],
+    strides: list[int],
+    pads: list[int],
 ):
     verify_unary(
         pool_name,
@@ -2810,19 +3083,35 @@ def test_onehot():
 
 @pytest.mark.parametrize("axis", [None, 0, 1, -1])
 @pytest.mark.parametrize("sorted", [0, 1])
-def test_unique(axis: Optional[int], sorted: int):
-    input_shape = [32, 32]
+@pytest.mark.parametrize("num_outputs", [1, 2, 3, 4])
+def test_unique(axis: int | None, sorted: int, num_outputs: int):
+    if num_outputs in [3, 4] and axis is None:
+        pytest.xfail("RuntimeError: Check failed: input_shape.size() == size (2 vs. 1)")
+
+    input_shape = [8, 8]
     if axis is None:
         output_shape = [-1]
     else:
-        output_shape = [32, 32]
+        output_shape = [8, 8]
         output_shape[axis] = -1
-    unique_node = helper.make_node("Unique", ["x"], ["y"], axis=axis, sorted=sorted)
+
+    output_names = ["y", "indices", "inverse_indices", "counts"][:num_outputs]
+    unique_node = helper.make_node("Unique", ["x"], output_names, axis=axis, sorted=sorted)
+
+    outputs = [helper.make_tensor_value_info("y", TensorProto.FLOAT, output_shape)]
+    if num_outputs > 1:
+        outputs.append(helper.make_tensor_value_info("indices", TensorProto.INT64, [-1]))
+    if num_outputs > 2:
+        # ONNX spec: inverse_indices is always 1D
+        outputs.append(helper.make_tensor_value_info("inverse_indices", TensorProto.INT64, [-1]))
+    if num_outputs > 3:
+        outputs.append(helper.make_tensor_value_info("counts", TensorProto.INT64, [-1]))
+
     graph = helper.make_graph(
         [unique_node],
         "unique_test",
         inputs=[helper.make_tensor_value_info("x", TensorProto.FLOAT, input_shape)],
-        outputs=[helper.make_tensor_value_info("y", TensorProto.FLOAT, output_shape)],
+        outputs=outputs,
     )
     model = helper.make_model(graph, producer_name="unique_test")
     check_correctness(model)
@@ -2868,7 +3157,7 @@ def test_space_to_depth():
     check_correctness(model)
 
 
-def construct_sequence(input_shape: List[int], num_tensors: int, name: str = "sequence"):
+def construct_sequence(input_shape: list[int], num_tensors: int, name: str = "sequence"):
     inputs = [f"data{i}" for i in range(num_tensors)]
     sequence_construct_node = helper.make_node("SequenceConstruct", inputs, [name])
     graph_inputs = [
@@ -2878,7 +3167,7 @@ def construct_sequence(input_shape: List[int], num_tensors: int, name: str = "se
     return sequence_construct_node, graph_inputs
 
 
-def make_constant_node(name: str, data_type: int, dims: List[int], vals: List[int]):
+def make_constant_node(name: str, data_type: int, dims: list[int], vals: list[int]):
     return helper.make_node(
         "Constant",
         inputs=[],
@@ -3027,9 +3316,9 @@ def test_symbolic_shape_deduction():
     tvm_model = from_onnx(model, keep_params_in_input=True)
 
     @R.function
-    def expected(
-        data: R.Tensor(("batch", "seq"), dtype="float32")
-    ) -> R.Tensor(dtype="float32", ndim=1):
+    def expected(data: R.Tensor(("batch", "seq"), dtype="float32")) -> R.Tensor(
+        dtype="float32", ndim=1
+    ):
         batch = T.int64()
         seq = T.int64()
         R.func_attr({"num_input": 1})
@@ -3328,6 +3617,7 @@ def test_nms():
     )
 
     model = helper.make_model(graph, producer_name="nms_test")
+    model.ir_version = 8
     model.opset_import[0].version = 11
 
     # Use deterministic random inputs for consistent testing
@@ -3363,7 +3653,7 @@ def test_nms():
     vm.invoke_stateful("main")
     tvm_output = vm.get_outputs("main")
 
-    if isinstance(tvm_output, (list, tuple)):
+    if isinstance(tvm_output, list | tuple):
         tvm_selected = tvm_output[0].numpy()
     else:
         tvm_selected = tvm_output.numpy()
@@ -3492,6 +3782,7 @@ def test_nms_iou_suppression():
     )
 
     model = helper.make_model(graph, producer_name="nms_test_iou_suppression")
+    model.ir_version = 8
     model.opset_import[0].version = 11
 
     inputs = {
@@ -3526,7 +3817,7 @@ def test_nms_iou_suppression():
     tvm_output = vm.get_outputs("main")
 
     # Custom NMS output comparison
-    if isinstance(tvm_output, (list, tuple)):
+    if isinstance(tvm_output, list | tuple):
         tvm_selected = tvm_output[0].numpy()
     else:
         tvm_selected = tvm_output.numpy()
@@ -3586,6 +3877,7 @@ def test_nms_max_boxes_limit():
     )
 
     model = helper.make_model(graph, producer_name="nms_test_max_boxes_limit")
+    model.ir_version = 8
     model.opset_import[0].version = 11
 
     inputs = {
@@ -3620,7 +3912,7 @@ def test_nms_max_boxes_limit():
     tvm_output = vm.get_outputs("main")
 
     # Custom NMS output comparison
-    if isinstance(tvm_output, (list, tuple)):
+    if isinstance(tvm_output, list | tuple):
         tvm_selected = tvm_output[0].numpy()
     else:
         tvm_selected = tvm_output.numpy()
@@ -3677,6 +3969,7 @@ def test_nms_score_threshold():
     )
 
     model = helper.make_model(graph, producer_name="nms_test_score_threshold")
+    model.ir_version = 8
     model.opset_import[0].version = 11
 
     inputs = {
@@ -3711,7 +4004,7 @@ def test_nms_score_threshold():
     tvm_output = vm.get_outputs("main")
 
     # Custom NMS output comparison
-    if isinstance(tvm_output, (list, tuple)):
+    if isinstance(tvm_output, list | tuple):
         tvm_selected = tvm_output[0].numpy()
     else:
         tvm_selected = tvm_output.numpy()
@@ -3723,6 +4016,700 @@ def test_nms_score_threshold():
         tvm.testing.assert_allclose(
             tvm_selected[:min_rows], ort_selected[:min_rows], rtol=1e-5, atol=1e-5
         )
+
+
+def test_affine_grid():
+    affine_grid_node = helper.make_node(
+        "AffineGrid",
+        ["theta", "size"],
+        ["grid"],
+        align_corners=1,
+    )
+
+    graph = helper.make_graph(
+        [affine_grid_node],
+        "affine_grid_test",
+        inputs=[
+            helper.make_tensor_value_info("theta", TensorProto.FLOAT, [2, 2, 3]),
+        ],
+        initializer=[
+            helper.make_tensor("size", TensorProto.INT64, [4], [2, 3, 16, 16]),
+        ],
+        outputs=[
+            helper.make_tensor_value_info("grid", TensorProto.FLOAT, [2, 16, 16, 2]),
+        ],
+    )
+
+    model = helper.make_model(graph, producer_name="affine_grid_test")
+    check_correctness(model, opset=20)
+
+
+@pytest.mark.parametrize("mode", ["bilinear", "nearest", "bicubic"])
+@pytest.mark.parametrize("padding_mode", ["zeros", "border", "reflection"])
+@pytest.mark.parametrize("align_corners", [0, 1])
+def test_grid_sample(mode, padding_mode, align_corners):
+    # Only testing 2D (NCHW) as that's what TVM currently supports
+    x_shape = [1, 3, 4, 4]
+    grid_shape = [1, 2, 2, 2]
+    out_shape = [x_shape[0], x_shape[1], grid_shape[1], grid_shape[2]]
+
+    node = helper.make_node(
+        "GridSample",
+        inputs=["X", "grid"],
+        outputs=["Y"],
+        mode=mode,
+        padding_mode=padding_mode,
+        align_corners=align_corners,
+    )
+
+    graph = helper.make_graph(
+        [node],
+        "grid_sample_test",
+        inputs=[
+            helper.make_tensor_value_info("X", TensorProto.FLOAT, x_shape),
+            helper.make_tensor_value_info("grid", TensorProto.FLOAT, grid_shape),
+        ],
+        outputs=[
+            helper.make_tensor_value_info("Y", TensorProto.FLOAT, out_shape),
+        ],
+    )
+
+    # Grid values must be in [-1, 1]: -1 is far left/top, 1 is far right/bottom
+    grid_data = np.random.uniform(-1, 1, grid_shape).astype("float32")
+    # Use controlled X input to avoid extreme values affecting nearest mode boundaries
+    x_data = np.random.uniform(-1, 1, x_shape).astype("float32")
+
+    model = helper.make_model(graph, producer_name="grid_sample_test")
+    check_correctness(
+        model,
+        inputs={"grid": grid_data, "X": x_data},
+        opset=16,
+    )
+
+
+def test_grid_sample_linear_mode_translation():
+    """Test that ONNX mode='linear' is correctly translated to 'bilinear'.
+
+    The ONNX spec defines 'linear' as a valid mode for GridSample, but
+    onnxruntime rejects it in practice. Real ONNX models exported from
+    frameworks like PyTorch may still use 'linear'. We verify the translation
+    by inspecting the Relax IR directly rather than running check_correctness.
+    """
+    x_shape = [1, 3, 4, 4]
+    grid_shape = [1, 2, 2, 2]
+
+    node = helper.make_node(
+        "GridSample",
+        inputs=["X", "grid"],
+        outputs=["Y"],
+        mode="linear",
+    )
+
+    graph = helper.make_graph(
+        [node],
+        "grid_sample_linear_test",
+        inputs=[
+            helper.make_tensor_value_info("X", TensorProto.FLOAT, x_shape),
+            helper.make_tensor_value_info("grid", TensorProto.FLOAT, grid_shape),
+        ],
+        outputs=[
+            helper.make_tensor_value_info(
+                "Y", TensorProto.FLOAT, [x_shape[0], x_shape[1], grid_shape[1], grid_shape[2]]
+            ),
+        ],
+    )
+
+    model = helper.make_model(graph, producer_name="grid_sample_linear_test")
+    tvm_model = from_onnx(model, opset=16, keep_params_in_input=True)
+    # Verify 'linear' was translated to 'bilinear' in the Relax IR
+    assert 'method="bilinear"' in str(tvm_model)
+
+
+def test_grid_sample_cubic_mode_translation():
+    """Test that ONNX mode='cubic' is correctly translated to 'bicubic'.
+
+    The ONNX spec defines 'cubic' as a valid mode for GridSample, but
+    TVM uses 'bicubic'. We verify the translation by inspecting the
+    Relax IR directly rather than running check_correctness.
+    """
+    x_shape = [1, 3, 4, 4]
+    grid_shape = [1, 2, 2, 2]
+
+    node = helper.make_node(
+        "GridSample",
+        inputs=["X", "grid"],
+        outputs=["Y"],
+        mode="cubic",
+    )
+
+    graph = helper.make_graph(
+        [node],
+        "grid_sample_cubic_test",
+        inputs=[
+            helper.make_tensor_value_info("X", TensorProto.FLOAT, x_shape),
+            helper.make_tensor_value_info("grid", TensorProto.FLOAT, grid_shape),
+        ],
+        outputs=[
+            helper.make_tensor_value_info(
+                "Y", TensorProto.FLOAT, [x_shape[0], x_shape[1], grid_shape[1], grid_shape[2]]
+            ),
+        ],
+    )
+
+    model = helper.make_model(graph, producer_name="grid_sample_cubic_test")
+    tvm_model = from_onnx(model, opset=16, keep_params_in_input=True)
+    # Verify 'cubic' was translated to 'bicubic' in the Relax IR
+    assert 'method="bicubic"' in str(tvm_model)
+
+
+@pytest.mark.parametrize(
+    ("coordinate_transformation_mode", "rois"),
+    [
+        (
+            "output_half_pixel",
+            np.array([[1.0, 1.0, 6.0, 6.0], [2.0, 0.5, 7.0, 7.0]], dtype="float32"),
+        ),
+        ("half_pixel", np.array([[1.0, 1.0, 1.2, 1.2], [2.0, 0.5, 1.1, 1.1]], dtype="float32")),
+    ],
+)
+def test_roi_align(coordinate_transformation_mode, rois):
+    x_shape = [1, 4, 8, 8]
+    rois_shape = [2, 4]
+    batch_indices_shape = [2]
+    out_shape = [2, 4, 3, 3]
+
+    node = helper.make_node(
+        "RoiAlign",
+        inputs=["X", "rois", "batch_indices"],
+        outputs=["Y"],
+        output_height=3,
+        output_width=3,
+        sampling_ratio=2,
+        spatial_scale=1.0,
+        mode="avg",
+        coordinate_transformation_mode=coordinate_transformation_mode,
+    )
+
+    graph = helper.make_graph(
+        [node],
+        "roi_align_test",
+        inputs=[
+            helper.make_tensor_value_info("X", TensorProto.FLOAT, x_shape),
+            helper.make_tensor_value_info("rois", TensorProto.FLOAT, rois_shape),
+            helper.make_tensor_value_info("batch_indices", TensorProto.INT64, batch_indices_shape),
+        ],
+        outputs=[helper.make_tensor_value_info("Y", TensorProto.FLOAT, out_shape)],
+    )
+
+    model = helper.make_model(graph, producer_name="roi_align_test")
+    inputs = {
+        "X": rg.standard_normal(size=x_shape).astype("float32"),
+        "rois": rois,
+        "batch_indices": np.array([0, 0], dtype="int64"),
+    }
+    check_correctness(model, inputs=inputs, opset=16, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "cond_info, cond_true, cond_false",
+    [
+        (
+            helper.make_tensor_value_info("cond", TensorProto.BOOL, []),
+            np.array(True),
+            np.array(False),
+        ),
+        (
+            helper.make_tensor_value_info("cond", TensorProto.BOOL, [1]),
+            np.array([True]),
+            np.array([False]),
+        ),
+    ],
+    ids=["scalar_condition", "tensor_condition"],
+)
+def test_if(cond_info, cond_true, cond_false):
+    """Test ONNX If operator with scalar and tensor bool conditions."""
+
+    x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [3])
+    result_info = helper.make_tensor_value_info("result", TensorProto.FLOAT, [3])
+
+    # then branch: x * 2.0
+    two = helper.make_tensor("two", TensorProto.FLOAT, [1], [2.0])
+    then_mul = helper.make_node("Mul", ["x", "two"], ["then_out"])
+    then_out_info = helper.make_tensor_value_info("then_out", TensorProto.FLOAT, [3])
+    then_graph = helper.make_graph([then_mul], "then_graph", [], [then_out_info], initializer=[two])
+
+    # else branch: x * 3.0
+    three = helper.make_tensor("three", TensorProto.FLOAT, [1], [3.0])
+    else_mul = helper.make_node("Mul", ["x", "three"], ["else_out"])
+    else_out_info = helper.make_tensor_value_info("else_out", TensorProto.FLOAT, [3])
+    else_graph = helper.make_graph(
+        [else_mul], "else_graph", [], [else_out_info], initializer=[three]
+    )
+
+    if_node = helper.make_node(
+        "If",
+        inputs=["cond"],
+        outputs=["result"],
+        then_branch=then_graph,
+        else_branch=else_graph,
+    )
+    main_graph = helper.make_graph([if_node], "if_test", [cond_info, x_info], [result_info])
+    model = helper.make_model(main_graph, opset_imports=[helper.make_opsetid("", 13)])
+
+    x_data = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+
+    check_correctness(model, inputs={"cond": cond_true, "x": x_data})
+    check_correctness(model, inputs={"cond": cond_false, "x": x_data})
+
+
+def test_if_computed_condition():
+    """Test If where condition is computed from another op in the main graph."""
+    import numpy as np
+    from onnx import TensorProto, helper
+
+    x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [3])
+    result_info = helper.make_tensor_value_info("result", TensorProto.FLOAT, [3])
+
+    zero = helper.make_tensor("zero", TensorProto.FLOAT, [], [0.0])
+    reduce_node = helper.make_node(
+        "ReduceSum", ["x"], ["x_sum"], keepdims=0, noop_with_empty_axes=0
+    )
+    greater_node = helper.make_node("Greater", ["x_sum", "zero"], ["cond"])
+
+    two = helper.make_tensor("two", TensorProto.FLOAT, [1], [2.0])
+    then_mul = helper.make_node("Mul", ["x", "two"], ["then_out"])
+    then_out_info = helper.make_tensor_value_info("then_out", TensorProto.FLOAT, [3])
+    then_graph = helper.make_graph([then_mul], "then_graph", [], [then_out_info], initializer=[two])
+
+    three = helper.make_tensor("three", TensorProto.FLOAT, [1], [3.0])
+    else_mul = helper.make_node("Mul", ["x", "three"], ["else_out"])
+    else_out_info = helper.make_tensor_value_info("else_out", TensorProto.FLOAT, [3])
+    else_graph = helper.make_graph(
+        [else_mul], "else_graph", [], [else_out_info], initializer=[three]
+    )
+
+    if_node = helper.make_node(
+        "If", inputs=["cond"], outputs=["result"], then_branch=then_graph, else_branch=else_graph
+    )
+
+    main_graph = helper.make_graph(
+        [reduce_node, greater_node, if_node],
+        "if_computed_cond",
+        [x_info],
+        [result_info],
+        initializer=[zero],
+    )
+    model = helper.make_model(main_graph, opset_imports=[helper.make_opsetid("", 13)])
+
+    check_correctness(model, inputs={"x": np.array([1.0, 2.0, 3.0], dtype=np.float32)})
+    check_correctness(model, inputs={"x": np.array([-1.0, -2.0, -3.0], dtype=np.float32)})
+
+
+def test_if_multiple_outputs():
+    """Test If operator where branches return multiple outputs."""
+    import numpy as np
+    from onnx import TensorProto, helper
+
+    cond_info = helper.make_tensor_value_info("cond", TensorProto.BOOL, [])
+    x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [3])
+    out1_info = helper.make_tensor_value_info("out1", TensorProto.FLOAT, [3])
+    out2_info = helper.make_tensor_value_info("out2", TensorProto.FLOAT, [3])
+
+    two = helper.make_tensor("two", TensorProto.FLOAT, [1], [2.0])
+    three = helper.make_tensor("three", TensorProto.FLOAT, [1], [3.0])
+
+    then_mul1 = helper.make_node("Mul", ["x", "two"], ["then_out1"])
+    then_mul2 = helper.make_node("Mul", ["x", "three"], ["then_out2"])
+    then_o1 = helper.make_tensor_value_info("then_out1", TensorProto.FLOAT, [3])
+    then_o2 = helper.make_tensor_value_info("then_out2", TensorProto.FLOAT, [3])
+    then_graph = helper.make_graph(
+        [then_mul1, then_mul2], "then_graph", [], [then_o1, then_o2], initializer=[two, three]
+    )
+
+    four = helper.make_tensor("four", TensorProto.FLOAT, [1], [4.0])
+    five = helper.make_tensor("five", TensorProto.FLOAT, [1], [5.0])
+    else_mul1 = helper.make_node("Mul", ["x", "four"], ["else_out1"])
+    else_mul2 = helper.make_node("Mul", ["x", "five"], ["else_out2"])
+    else_o1 = helper.make_tensor_value_info("else_out1", TensorProto.FLOAT, [3])
+    else_o2 = helper.make_tensor_value_info("else_out2", TensorProto.FLOAT, [3])
+    else_graph = helper.make_graph(
+        [else_mul1, else_mul2], "else_graph", [], [else_o1, else_o2], initializer=[four, five]
+    )
+
+    if_node = helper.make_node(
+        "If",
+        inputs=["cond"],
+        outputs=["out1", "out2"],
+        then_branch=then_graph,
+        else_branch=else_graph,
+    )
+    main_graph = helper.make_graph(
+        [if_node], "if_multi_out", [cond_info, x_info], [out1_info, out2_info]
+    )
+    model = helper.make_model(main_graph, opset_imports=[helper.make_opsetid("", 13)])
+
+    x_data = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    check_correctness(model, inputs={"cond": np.array(True), "x": x_data})
+    check_correctness(model, inputs={"cond": np.array(False), "x": x_data})
+
+
+def test_if_nested():
+    """Test nested If operator inside a branch."""
+    import numpy as np
+    from onnx import TensorProto, helper
+
+    cond1_info = helper.make_tensor_value_info("cond1", TensorProto.BOOL, [])
+    cond2_info = helper.make_tensor_value_info("cond2", TensorProto.BOOL, [])
+    x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [3])
+    result_info = helper.make_tensor_value_info("result", TensorProto.FLOAT, [3])
+
+    # Inner then: x * 2
+    two = helper.make_tensor("two", TensorProto.FLOAT, [1], [2.0])
+    inner_then_mul = helper.make_node("Mul", ["x", "two"], ["inner_then_out"])
+    inner_then_out_info = helper.make_tensor_value_info("inner_then_out", TensorProto.FLOAT, [3])
+    inner_then_graph = helper.make_graph(
+        [inner_then_mul], "inner_then", [], [inner_then_out_info], initializer=[two]
+    )
+
+    # Inner else: x * 3
+    three = helper.make_tensor("three", TensorProto.FLOAT, [1], [3.0])
+    inner_else_mul = helper.make_node("Mul", ["x", "three"], ["inner_else_out"])
+    inner_else_out_info = helper.make_tensor_value_info("inner_else_out", TensorProto.FLOAT, [3])
+    inner_else_graph = helper.make_graph(
+        [inner_else_mul], "inner_else", [], [inner_else_out_info], initializer=[three]
+    )
+
+    # Outer then: nested If(cond2, x*2, x*3)
+    inner_if = helper.make_node(
+        "If",
+        inputs=["cond2"],
+        outputs=["outer_then_out"],
+        then_branch=inner_then_graph,
+        else_branch=inner_else_graph,
+    )
+    outer_then_out_info = helper.make_tensor_value_info("outer_then_out", TensorProto.FLOAT, [3])
+    outer_then_graph = helper.make_graph([inner_if], "outer_then", [], [outer_then_out_info])
+
+    # Outer else: x * 4
+    four = helper.make_tensor("four", TensorProto.FLOAT, [1], [4.0])
+    outer_else_mul = helper.make_node("Mul", ["x", "four"], ["outer_else_out"])
+    outer_else_out_info = helper.make_tensor_value_info("outer_else_out", TensorProto.FLOAT, [3])
+    outer_else_graph = helper.make_graph(
+        [outer_else_mul], "outer_else", [], [outer_else_out_info], initializer=[four]
+    )
+
+    outer_if = helper.make_node(
+        "If",
+        inputs=["cond1"],
+        outputs=["result"],
+        then_branch=outer_then_graph,
+        else_branch=outer_else_graph,
+    )
+    main_graph = helper.make_graph(
+        [outer_if], "nested_if", [cond1_info, cond2_info, x_info], [result_info]
+    )
+    model = helper.make_model(main_graph, opset_imports=[helper.make_opsetid("", 13)])
+
+    x_data = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    # cond1=True, cond2=True → x * 2
+    check_correctness(model, inputs={"cond1": np.array(True), "cond2": np.array(True), "x": x_data})
+    # cond1=True, cond2=False → x * 3
+    check_correctness(
+        model, inputs={"cond1": np.array(True), "cond2": np.array(False), "x": x_data}
+    )
+    # cond1=False → x * 4
+    check_correctness(
+        model, inputs={"cond1": np.array(False), "cond2": np.array(True), "x": x_data}
+    )
+
+
+def test_quantizelinear_singleton_qparams_opset10():
+    """QuantizeLinear must treat shape-[1] scale/zp as scalar in opset10."""
+    node = helper.make_node("QuantizeLinear", ["x", "scale", "zero_point"], ["y"])
+    graph = helper.make_graph(
+        [node],
+        "quantizelinear_singleton_qparams_opset10",
+        [helper.make_tensor_value_info("x", TensorProto.FLOAT, [4, 3, 2, 2])],
+        [helper.make_tensor_value_info("y", TensorProto.UINT8, [4, 3, 2, 2])],
+        initializer=[
+            helper.make_tensor("scale", TensorProto.FLOAT, [1], [0.03125]),
+            helper.make_tensor("zero_point", TensorProto.UINT8, [1], [127]),
+        ],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 10)])
+
+    x = rg.standard_normal((4, 3, 2, 2)).astype("float32")
+    check_correctness(model, inputs={"x": x}, opset=10, check_dtypes=True)
+
+
+def test_dequantizelinear_singleton_qparams_opset10():
+    """DequantizeLinear must treat shape-[1] scale/zp as scalar in opset10."""
+    node = helper.make_node("DequantizeLinear", ["x", "scale", "zero_point"], ["y"])
+    graph = helper.make_graph(
+        [node],
+        "dequantizelinear_singleton_qparams_opset10",
+        [helper.make_tensor_value_info("x", TensorProto.UINT8, [64])],
+        [helper.make_tensor_value_info("y", TensorProto.FLOAT, [64])],
+        initializer=[
+            helper.make_tensor("scale", TensorProto.FLOAT, [1], [0.125]),
+            helper.make_tensor("zero_point", TensorProto.UINT8, [1], [1]),
+        ],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 10)])
+
+    x = rg.integers(low=0, high=255, size=(64,), dtype=np.uint8)
+    check_correctness(model, inputs={"x": x}, opset=10, check_dtypes=True)
+
+
+def test_quantizelinear_optional_zero_point_opset13():
+    """ONNX allows missing zero_point input; importer should default it to 0 (uint8)."""
+    node = helper.make_node("QuantizeLinear", ["x", "scale"], ["y"])
+    graph = helper.make_graph(
+        [node],
+        "quantizelinear_optional_zero_point_opset13",
+        [helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 5])],
+        [helper.make_tensor_value_info("y", TensorProto.UINT8, [2, 5])],
+        initializer=[helper.make_tensor("scale", TensorProto.FLOAT, [], [0.2])],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+
+    x = rg.standard_normal((2, 5)).astype("float32")
+    check_correctness(model, inputs={"x": x}, opset=13, check_dtypes=True)
+
+
+def test_dynamicquantizelinear_opset11():
+    """DynamicQuantizeLinear returns (y, y_scale, y_zero_point) with ORT parity."""
+    node = helper.make_node("DynamicQuantizeLinear", ["x"], ["y", "y_scale", "y_zero_point"])
+    graph = helper.make_graph(
+        [node],
+        "dynamicquantizelinear_opset11",
+        [helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 3, 4])],
+        [
+            helper.make_tensor_value_info("y", TensorProto.UINT8, [2, 3, 4]),
+            helper.make_tensor_value_info("y_scale", TensorProto.FLOAT, []),
+            helper.make_tensor_value_info("y_zero_point", TensorProto.UINT8, []),
+        ],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 11)])
+
+    x = rg.standard_normal((2, 3, 4)).astype("float32")
+    check_correctness(model, inputs={"x": x}, opset=11, atol=1e-5, rtol=1e-5, check_dtypes=True)
+
+
+# Helper that builds the ONNX graph for MatMulInteger so the tests don't repeat boilerplate code every time
+def _make_matmulinteger_model(A_shape, B_shape, A_dtype, B_dtype, a_zp_array=None, b_zp_array=None):
+    """Build a minimal single-node ONNX graph for MatMulInteger."""
+
+    def np_dtype_to_onnx(dt):
+        return {np.int8: TensorProto.INT8, np.uint8: TensorProto.UINT8}[dt]
+
+    A_info = helper.make_tensor_value_info("A", np_dtype_to_onnx(A_dtype), A_shape)
+    B_info = helper.make_tensor_value_info("B", np_dtype_to_onnx(B_dtype), B_shape)
+    graph_inputs = [A_info, B_info]
+    node_inputs = ["A", "B"]
+    initializers = []
+
+    def _add_zp(name, arr, dtype):
+        onnx_dtype = np_dtype_to_onnx(dtype)
+        shape = list(arr.shape)
+        initializers.append(helper.make_tensor(name, onnx_dtype, shape, arr.flatten().tolist()))
+        node_inputs.append(name)
+
+    if a_zp_array is not None:
+        _add_zp("a_zero_point", a_zp_array, A_dtype)
+    elif b_zp_array is not None:
+        node_inputs.append("")  # placeholder only needed if b_zp is present
+
+    if b_zp_array is not None:
+        _add_zp("b_zero_point", b_zp_array, B_dtype)
+
+    out_info = helper.make_tensor_value_info("output", TensorProto.INT32, None)
+    node = helper.make_node("MatMulInteger", inputs=node_inputs, outputs=["output"])
+    graph = helper.make_graph(
+        [node], "matmulinteger", graph_inputs, [out_info], initializer=initializers
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 10)])
+    model.ir_version = 8
+    return model
+
+
+@pytest.mark.parametrize(
+    "A_dtype,B_dtype,a_zp,b_zp",
+    [
+        (np.int8, np.int8, None, None),
+        (np.uint8, np.uint8, None, None),
+        (np.uint8, np.int8, None, None),
+        pytest.param(
+            np.int8,
+            np.uint8,
+            None,
+            None,
+            marks=pytest.mark.xfail(
+                reason="Some older ORT versions doesn't support mixed int8/uint8 dtype combination for MatMulInteger",
+                strict=False,  # not strict - may pass on newer ORT versions
+            ),
+        ),
+        (np.uint8, np.uint8, np.uint8(128), np.uint8(128)),
+        (np.int8, np.int8, np.int8(1), np.int8(2)),
+    ],
+)
+def test_matmulinteger(A_dtype, B_dtype, a_zp, b_zp):
+    """2-D matmul across all dtype combos and zero-point configurations."""
+    np.random.seed(0)
+    A = np.random.randint(-5, 5, (4, 8)).astype(A_dtype)
+    B = np.random.randint(-5, 5, (8, 6)).astype(B_dtype)
+    model = _make_matmulinteger_model(
+        [4, 8],
+        [8, 6],
+        A_dtype,
+        B_dtype,
+        a_zp_array=np.array(a_zp, dtype=A_dtype) if a_zp is not None else None,
+        b_zp_array=np.array(b_zp, dtype=B_dtype) if b_zp is not None else None,
+    )
+    check_correctness(model, inputs={"A": A, "B": B}, opset=10)
+
+
+@pytest.mark.parametrize(
+    "A_shape,B_shape,a_zp,b_zp",
+    [
+        ((2, 4, 8), (2, 8, 6), np.int8(1), np.int8(2)),  # 3-D batched
+        ((2, 3, 4, 8), (2, 3, 8, 6), np.int8(1), np.int8(2)),  # 4-D batched
+    ],
+)
+def test_matmulinteger_batched(A_shape, B_shape, a_zp, b_zp):
+    """Batched matmul — verifies the op generalizes beyond 2-D."""
+    np.random.seed(1)
+    A = np.random.randint(-5, 5, A_shape).astype(np.int8)
+    B = np.random.randint(-5, 5, B_shape).astype(np.int8)
+    model = _make_matmulinteger_model(
+        list(A_shape),
+        list(B_shape),
+        np.int8,
+        np.int8,
+        a_zp_array=np.array(a_zp, dtype=np.int8),
+        b_zp_array=np.array(b_zp, dtype=np.int8),
+    )
+    check_correctness(model, inputs={"A": A, "B": B}, opset=10)
+
+
+def test_matmulinteger_per_channel_zp():
+    """
+    1-D zero points: per-row for A ([M]) and per-col for B ([N]).
+    Exercises the expand_dims path in the converter.
+    Note: ORT CPU does not support per-row a_zero_point despite the ONNX spec
+    allowing it, so we verify TVM output against a NumPy reference instead.
+    """
+    np.random.seed(2)
+    A = np.random.randint(-5, 5, (4, 8)).astype(np.int8)
+    B = np.random.randint(-5, 5, (8, 6)).astype(np.int8)
+    a_zp = np.arange(4, dtype=np.int8)  # shape [M=4], per-row
+    b_zp = np.arange(6, dtype=np.int8)  # shape [N=6], per-col
+
+    # NumPy reference: mirrors the converter's expand_dims logic
+    expected = np.matmul(
+        A.astype(np.int32) - a_zp.astype(np.int32)[:, np.newaxis],
+        B.astype(np.int32) - b_zp.astype(np.int32)[np.newaxis, :],
+    ).astype(np.int32)
+
+    model = _make_matmulinteger_model(
+        [4, 8], [8, 6], np.int8, np.int8, a_zp_array=a_zp, b_zp_array=b_zp
+    )
+
+    # Run TVM only — ORT doesn't support per-row a_zero_point
+    tvm_model = from_onnx(model, opset=10, keep_params_in_input=True)
+    tvm_model = relax.transform.DecomposeOpsForInference()(tvm_model)
+    tvm_model = relax.transform.LegalizeOps()(tvm_model)
+    tvm_model, params = relax.frontend.detach_params(tvm_model)
+
+    with tvm.transform.PassContext(opt_level=3):
+        ex = tvm.compile(tvm_model, target="llvm")
+        vm = relax.VirtualMachine(ex, tvm.cpu())
+
+    input_list = [
+        {"A": A, "B": B}[k.name_hint] for k in tvm_model["main"].params if k.name_hint in {"A", "B"}
+    ]
+    if params:
+        input_list += params["main"]
+
+    vm.set_input("main", *input_list)
+    vm.invoke_stateful("main")
+    tvm_output = vm.get_outputs("main").numpy()
+
+    tvm.testing.assert_allclose(tvm_output, expected)
+
+
+@pytest.mark.xfail(
+    reason=(
+        "ORT doesn't support per-row a_zero_point of shape [M] "
+        "despite the ONNX spec explicitly allowing it. "
+        "See: matmul_integer.cc:63 IsScalarOr1ElementVector(a_zero_point)"
+    ),
+    strict=True,  # must fail, if ORT ever fixes this, the test will alert us
+)
+def test_matmulinteger_per_channel_zp_ort_limitation():
+    """
+    Documents that ORT CPU rejects per-row a_zero_point of shape [M].
+    Marked xfail because this is a valid ONNX spec case that ORT simply
+    hasn't implemented. If this test starts passing, ORT has fixed the
+    limitation and test_matmulinteger_per_channel_zp can be simplified
+    to use check_correctness instead of a manual TVM-only reference.
+    """
+    np.random.seed(2)
+    A = np.random.randint(-5, 5, (4, 8)).astype(np.int8)
+    B = np.random.randint(-5, 5, (8, 6)).astype(np.int8)
+    a_zp = np.arange(4, dtype=np.int8)  # shape [M=4], per-row
+    b_zp = np.arange(6, dtype=np.int8)  # shape [N=6], per-col
+
+    model = _make_matmulinteger_model(
+        [4, 8], [8, 6], np.int8, np.int8, a_zp_array=a_zp, b_zp_array=b_zp
+    )
+    check_correctness(model, inputs={"A": A, "B": B}, opset=10)
+
+
+@pytest.mark.parametrize(
+    ("pooled_shape", "rois"),
+    [
+        ((1, 1), np.array([[0.0, 1.0, 1.0, 6.0, 6.0], [0.0, 0.0, 0.0, 7.0, 7.0]], dtype="float32")),
+        (
+            (2, 3),
+            np.array([[0.0, 1.2, 0.5, 6.8, 7.0], [0.0, -1.0, 2.0, 3.5, 5.2]], dtype="float32"),
+        ),
+        (
+            (2, 2),
+            np.array(
+                [[0.0, 100.0, 100.0, 110.0, 110.0], [0.0, 1.0, 1.0, 6.0, 6.0]], dtype="float32"
+            ),
+        ),
+    ],
+)
+def test_max_roi_pool(pooled_shape, rois):
+    x_shape = [1, 4, 8, 8]
+    out_shape = [2, 4, pooled_shape[0], pooled_shape[1]]
+
+    node = helper.make_node(
+        "MaxRoiPool",
+        inputs=["X", "rois"],
+        outputs=["Y"],
+        pooled_shape=pooled_shape,
+        spatial_scale=1.0,
+    )
+
+    graph = helper.make_graph(
+        [node],
+        "max_roi_pool_test",
+        inputs=[
+            helper.make_tensor_value_info("X", TensorProto.FLOAT, x_shape),
+            helper.make_tensor_value_info("rois", TensorProto.FLOAT, [2, 5]),
+        ],
+        outputs=[helper.make_tensor_value_info("Y", TensorProto.FLOAT, out_shape)],
+    )
+
+    model = helper.make_model(graph, producer_name="max_roi_pool_test")
+    inputs = {
+        "X": rg.standard_normal(size=x_shape).astype("float32"),
+        "rois": rois,
+    }
+    check_correctness(model, inputs=inputs, opset=16, rtol=1e-5, atol=1e-5)
 
 
 if __name__ == "__main__":

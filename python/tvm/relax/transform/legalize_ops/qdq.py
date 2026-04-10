@@ -35,6 +35,18 @@ def is_const_scalar(x):
     return isinstance(x, (tvm.tir.IntImm, tvm.tir.FloatImm))
 
 
+def _is_singleton_qparam(qparam: te.Tensor) -> bool:
+    """Return True if qparam is a tensor with all dimensions equal to 1."""
+    if not isinstance(qparam, te.Tensor):
+        return False
+    if len(qparam.shape) == 0:
+        return True
+    for dim in qparam.shape:
+        if not isinstance(dim, tir.IntImm) or dim.value != 1:
+            return False
+    return True
+
+
 @register_legalize("relax.quantize")
 def _quantize(bb: BlockBuilder, call: Call) -> Expr:
     """
@@ -49,9 +61,23 @@ def _quantize(bb: BlockBuilder, call: Call) -> Expr:
         scale: Union[te.Tensor, tir.IntImm, tir.FloatImm],
         zp: Union[te.Tensor, tir.IntImm, tir.FloatImm],
     ):
+        scale_singleton = _is_singleton_qparam(scale) if isinstance(scale, te.Tensor) else False
+        zp_singleton = _is_singleton_qparam(zp) if isinstance(zp, te.Tensor) else False
+
         def quantize_compute(*indices):
-            scale_value = scale if is_const_scalar(scale) else scale[indices[axis]]
-            zp_value = zp if is_const_scalar(zp) else zp[indices[axis]]
+            if is_const_scalar(scale):
+                scale_value = scale
+            elif scale_singleton:
+                scale_value = scale[(0,) * len(scale.shape)]
+            else:
+                scale_value = scale[indices[axis]]
+
+            if is_const_scalar(zp):
+                zp_value = zp
+            elif zp_singleton:
+                zp_value = zp[(0,) * len(zp.shape)]
+            else:
+                zp_value = zp[indices[axis]]
             scaled = data[indices] / scale_value
             round_val = (te.round(scaled) if "int" in out_dtype else scaled) + zp_value
             return clip_cast(round_val, out_dtype)
@@ -97,9 +123,23 @@ def _dequantize(bb: BlockBuilder, call: Call) -> Expr:
         scale: Union[te.Tensor, tir.IntImm, tir.FloatImm],
         zp: Union[te.Tensor, tir.IntImm, tir.FloatImm],
     ):
+        scale_singleton = _is_singleton_qparam(scale) if isinstance(scale, te.Tensor) else False
+        zp_singleton = _is_singleton_qparam(zp) if isinstance(zp, te.Tensor) else False
+
         def dequantize_compute(*indices):
-            scale_value = scale if is_const_scalar(scale) else scale[indices[axis]]
-            zp_value = zp if is_const_scalar(zp) else zp[indices[axis]]
+            if is_const_scalar(scale):
+                scale_value = scale
+            elif scale_singleton:
+                scale_value = scale[(0,) * len(scale.shape)]
+            else:
+                scale_value = scale[indices[axis]]
+
+            if is_const_scalar(zp):
+                zp_value = zp
+            elif zp_singleton:
+                zp_value = zp[(0,) * len(zp.shape)]
+            else:
+                zp_value = zp[indices[axis]]
             dtype = "float32" if "float" in data.dtype else "int32"
             sub = te.subtract(data[indices].astype(dtype), zp_value)
             out = te.multiply(sub, scale_value.astype("float32"))
