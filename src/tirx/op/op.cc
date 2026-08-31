@@ -36,6 +36,7 @@
 #include <cmath>
 // Centralized header for constant folders.
 #include "../../arith/const_fold.h"
+#include "../../target/datatype/registry.h"
 #include "../analysis/check_contains.h"
 
 namespace tvm {
@@ -202,13 +203,21 @@ PrimType PromoteBinaryOpType(PrimType lhs_ty, PrimType rhs_ty) {
   // Keep conversion behavior consistent with the previous DataType-based path.
   if (IsFloatType(lhs_ty) && IsFloatType(rhs_ty)) {
     return lhs_ty.bits() < rhs_ty.bits() ? rhs_ty : lhs_ty;
-  } else if (!IsFloatType(lhs_ty) && IsFloatType(rhs_ty)) {
+  } else if (!IsFloatType(lhs_ty) &&
+             (IsFloatType(rhs_ty) || datatype::Registry::Global()->GetTypeRegistered(
+                                         static_cast<uint8_t>(rhs_ty.code())))) {
     return rhs_ty;
-  } else if (IsFloatType(lhs_ty) && !IsFloatType(rhs_ty)) {
+  } else if ((IsFloatType(lhs_ty) || datatype::Registry::Global()->GetTypeRegistered(
+                                           static_cast<uint8_t>(lhs_ty.code()))) &&
+             !IsFloatType(rhs_ty)) {
     return lhs_ty;
-  } else if (!IsBFloat16Type(lhs_ty) && IsBFloat16Type(rhs_ty)) {
+  } else if (!IsBFloat16Type(lhs_ty) &&
+             (IsBFloat16Type(rhs_ty) || datatype::Registry::Global()->GetTypeRegistered(
+                                            static_cast<uint8_t>(rhs_ty.code())))) {
     return rhs_ty;
-  } else if (IsBFloat16Type(lhs_ty) && !IsBFloat16Type(rhs_ty)) {
+  } else if ((IsBFloat16Type(lhs_ty) || datatype::Registry::Global()->GetTypeRegistered(
+                                              static_cast<uint8_t>(lhs_ty.code()))) &&
+             !IsBFloat16Type(rhs_ty)) {
     return lhs_ty;
   } else if (!IsFloat8Type(lhs_ty) && IsFloat8Type(rhs_ty)) {
     return rhs_ty;
@@ -376,7 +385,13 @@ PrimExpr min_value(PrimType value_ty, Span span) {
   using namespace tirx;
   PrimType dtype = value_ty;
   TVM_FFI_ICHECK_EQ(dtype.lanes(), 1);
-  if (dtype.MatchesCode(DLDataTypeCode::kDLInt)) {
+  uint8_t type_code = static_cast<uint8_t>(dtype.code());
+  if (datatype::Registry::Global()->GetTypeRegistered(type_code)) {
+    auto f = datatype::GetMinFunc(type_code);
+    TVM_FFI_ICHECK(f) << "No minimum function registered for custom dtype "
+                      << static_cast<unsigned int>(type_code);
+    return (*f)(dtype.bits()).cast<PrimExpr>();
+  } else if (dtype.MatchesCode(DLDataTypeCode::kDLInt)) {
     if (dtype.bits() == 64) {
       return IntImm(value_ty, std::numeric_limits<int64_t>::lowest(), span);
     } else if (dtype.bits() < 64) {

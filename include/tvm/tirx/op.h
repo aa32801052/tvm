@@ -986,7 +986,9 @@ inline PrimExpr MakeConstScalar(PrimType dtype, ValueType value, Span span = Spa
                         DLDataTypeCode::kDLFloat8_e5m2, DLDataTypeCode::kDLFloat8_e5m2fnuz,
                         DLDataTypeCode::kDLFloat8_e8m0fnu, DLDataTypeCode::kDLFloat6_e2m3fn,
                         DLDataTypeCode::kDLFloat6_e3m2fn, DLDataTypeCode::kDLFloat4_e2m1fn) ||
-      dtype.MatchesElementType(DLDataTypeCode::kDLBfloat, 16)) {
+      dtype.MatchesElementType(DLDataTypeCode::kDLBfloat, 16) ||
+      static_cast<uint8_t>(dtype.code()) >=
+          static_cast<uint8_t>(ffi::DLExtDataTypeCode::kDLExtCustomBegin)) {
     return FloatImm(dtype, static_cast<double>(value), span);
   }
   TVM_FFI_THROW(InternalError) << "cannot make const for type " << dtype;

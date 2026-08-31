@@ -34,6 +34,7 @@
 #include <tuple>
 #include <utility>
 
+#include "../target/datatype/registry.h"
 #include "../tirx/analysis/check_contains.h"
 #include "conjunctive_normal_form.h"
 #include "const_fold.h"
