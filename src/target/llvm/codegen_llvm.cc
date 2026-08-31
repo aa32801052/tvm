@@ -639,7 +639,8 @@ llvm::Type* CodeGenLLVM::GetLLVMType(const Type& type) const {
     // LLVM IR doesn't allow void*, so pointer element types that do not
     // have an LLVM scalar equivalent need explicit handling.
     if (auto* primtype = ptr->element_type.as<PrimTypeNode>()) {
-      if (PrimType(primtype->dtype).IsVoid()) {
+      if (PrimType(primtype->dtype).IsVoid() ||
+          PrimType(primtype->dtype).code() >= ffi::DLExtDataTypeCode::kDLExtCustomBegin) {
         return t_void_p_;
       }
     } else if (ptr->element_type->IsInstance<TensorMapTypeNode>()) {
