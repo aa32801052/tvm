@@ -295,3 +295,6 @@ python/bin/
 python/typing_extensions.py
 python/*.dist-info/
 pytest-of-bohanhou/
+testcode/CNN/model/
+testcode/CNN/imagenet100_hf/
+testcode/LLM/model/
