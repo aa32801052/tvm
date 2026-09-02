@@ -958,7 +958,10 @@ TVM_FFI_STATIC_INIT_BLOCK() {
 // pow
 PrimExpr pow(PrimExpr x, PrimExpr y, Span span) {
   BinaryOpMatchTypes(x, y, span);
-  TVM_FFI_ICHECK(IsFloatType(x.ty())) << "power only applies to float";
+  TVM_FFI_ICHECK(IsFloatType(x.ty()) ||
+                 datatype::Registry::Global()->GetTypeRegistered(
+                     static_cast<uint8_t>(x.ty().code())))
+      << "power only applies to float or a registered custom datatype";
 
   // If we detect pow(x, 3), suggest using x * x * x
   if (y.ty().MatchesCode(DLDataTypeCode::kDLInt)) {

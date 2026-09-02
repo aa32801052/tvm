@@ -19,6 +19,7 @@
 
 from tvm import relax, topi
 from tvm.ir import Call
+from tvm.target.datatype import get_type_registered
 
 from ...block_builder import BlockBuilder
 from ...expr import Expr
@@ -27,6 +28,9 @@ from .common import _is_relax_expr, _try_convert_to_scalar_const, register_legal
 
 @register_legalize("relax.astype")
 def _astype(bb: BlockBuilder, call: Call) -> Expr:
+    if get_type_registered(call.attrs.dtype.type_code):
+        return bb.call_te(topi.cast, call.args[0], call.attrs.dtype)
+
     arg = _try_convert_to_scalar_const(call.args[0], python_native=True)
     if _is_relax_expr(arg):
         return bb.call_te(topi.cast, arg, call.attrs.dtype)
