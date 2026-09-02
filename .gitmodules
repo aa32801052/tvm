@@ -16,4 +16,3 @@
 [submodule "3rdparty/universal"]
 	path = 3rdparty/universal
 	url = https://github.com/hunghsiangwang/universal.git
-	branch = v3.86

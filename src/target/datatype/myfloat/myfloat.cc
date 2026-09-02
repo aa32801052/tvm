@@ -39,7 +39,7 @@
 // When returning, your custom datatype needs to be re-wrapped into a uint,
 // which can be thought of as just a wrapper for the raw bits that represent your custom datatype.
 template <class T>
-TVM_DLL T Uint32ToCustom32(uint32_t in) {
+TVM_DLL T Uint32ToMyfloat_32(uint32_t in) {
   // This is a helper function to interpret the uint as your custom dataype.
   // The following line should be replaced with the appropriate function
   // that interprets the bits in `in` and returns your custom datatype
@@ -48,7 +48,7 @@ TVM_DLL T Uint32ToCustom32(uint32_t in) {
 }
 
 template <class T>
-TVM_DLL uint32_t Custom32ToUint32(T in) {
+TVM_DLL uint32_t Myfloat_32ToUint32(T in) {
   // This is a helper function to wrap your custom datatype in a uint.
   // the following line should be replaced with the appropriate function
   // that converts your custom datatype into a uint
@@ -57,88 +57,88 @@ TVM_DLL uint32_t Custom32ToUint32(T in) {
 }
 
 extern "C" {
-TVM_DLL uint32_t MinCustom32() {
+TVM_DLL uint32_t MinMyfloat_32() {
   // return minimum representable value
   float min = std::numeric_limits<float>::lowest();
-  return Custom32ToUint32<float>(min);
+  return Myfloat_32ToUint32<float>(min);
 }
 
-TVM_DLL float Custom32ToFloat(uint32_t in) {
+TVM_DLL float Myfloat_32ToFloat(uint32_t in) {
   // cast from custom datatype to float
-  float custom_datatype = Uint32ToCustom32<float>(in);
+  float custom_datatype = Uint32ToMyfloat_32<float>(in);
   // our custom datatype is float, so the following redundant cast to float
   // is to remind users to cast their own custom datatype to float
   return static_cast<float>(custom_datatype);
 }
 
-TVM_DLL uint32_t FloatToCustom32(float in) {
+TVM_DLL uint32_t FloatToMyfloat_32(float in) {
   // cast from float to custom datatype
-  return Custom32ToUint32<float>(in);
+  return Myfloat_32ToUint32<float>(in);
 }
 
-TVM_DLL uint32_t Custom32Add(uint32_t a, uint32_t b) {
+TVM_DLL uint32_t Myfloat_32Add(uint32_t a, uint32_t b) {
   // add operation
-  float acustom = Uint32ToCustom32<float>(a);
-  float bcustom = Uint32ToCustom32<float>(b);
-  return Custom32ToUint32<float>(acustom + bcustom);
+  float acustom = Uint32ToMyfloat_32<float>(a);
+  float bcustom = Uint32ToMyfloat_32<float>(b);
+  return Myfloat_32ToUint32<float>(acustom + bcustom);
 }
 
-TVM_DLL uint32_t Custom32Sub(uint32_t a, uint32_t b) {
+TVM_DLL uint32_t Myfloat_32Sub(uint32_t a, uint32_t b) {
   // subtract
-  float acustom = Uint32ToCustom32<float>(a);
-  float bcustom = Uint32ToCustom32<float>(b);
-  return Custom32ToUint32<float>(acustom - bcustom);
+  float acustom = Uint32ToMyfloat_32<float>(a);
+  float bcustom = Uint32ToMyfloat_32<float>(b);
+  return Myfloat_32ToUint32<float>(acustom - bcustom);
 }
 
-TVM_DLL uint32_t Custom32Mul(uint32_t a, uint32_t b) {
+TVM_DLL uint32_t Myfloat_32Mul(uint32_t a, uint32_t b) {
   // multiply
-  float acustom = Uint32ToCustom32<float>(a);
-  float bcustom = Uint32ToCustom32<float>(b);
-  return Custom32ToUint32<float>(acustom * bcustom);
+  float acustom = Uint32ToMyfloat_32<float>(a);
+  float bcustom = Uint32ToMyfloat_32<float>(b);
+  return Myfloat_32ToUint32<float>(acustom * bcustom);
 }
 
-TVM_DLL uint32_t Custom32Div(uint32_t a, uint32_t b) {
+TVM_DLL uint32_t Myfloat_32Div(uint32_t a, uint32_t b) {
   // divide
-  float acustom = Uint32ToCustom32<float>(a);
-  float bcustom = Uint32ToCustom32<float>(b);
-  return Custom32ToUint32<float>(acustom / bcustom);
+  float acustom = Uint32ToMyfloat_32<float>(a);
+  float bcustom = Uint32ToMyfloat_32<float>(b);
+  return Myfloat_32ToUint32<float>(acustom / bcustom);
 }
 
-TVM_DLL uint32_t Custom32Max(uint32_t a, uint32_t b) {
+TVM_DLL uint32_t Myfloat_32Max(uint32_t a, uint32_t b) {
   // max
-  float acustom = Uint32ToCustom32<float>(a);
-  float bcustom = Uint32ToCustom32<float>(b);
-  return Custom32ToUint32<float>(acustom > bcustom ? acustom : bcustom);
+  float acustom = Uint32ToMyfloat_32<float>(a);
+  float bcustom = Uint32ToMyfloat_32<float>(b);
+  return Myfloat_32ToUint32<float>(acustom > bcustom ? acustom : bcustom);
 }
 
-TVM_DLL uint32_t Custom32Sqrt(uint32_t a) {
+TVM_DLL uint32_t Myfloat_32Sqrt(uint32_t a) {
   // sqrt
-  float acustom = Uint32ToCustom32<float>(a);
-  return Custom32ToUint32<float>(sqrt(acustom));
+  float acustom = Uint32ToMyfloat_32<float>(a);
+  return Myfloat_32ToUint32<float>(sqrt(acustom));
 }
 
-TVM_DLL uint32_t Custom32Exp(uint32_t a) {
+TVM_DLL uint32_t Myfloat_32Exp(uint32_t a) {
   // exponential
-  float acustom = Uint32ToCustom32<float>(a);
-  return Custom32ToUint32<float>(exp(acustom));
+  float acustom = Uint32ToMyfloat_32<float>(a);
+  return Myfloat_32ToUint32<float>(exp(acustom));
 }
 
-TVM_DLL uint32_t Custom32Log(uint32_t a) {
+TVM_DLL uint32_t Myfloat_32Log(uint32_t a) {
   // log
-  float acustom = Uint32ToCustom32<float>(a);
-  return Custom32ToUint32<float>(log(acustom));
+  float acustom = Uint32ToMyfloat_32<float>(a);
+  return Myfloat_32ToUint32<float>(log(acustom));
 }
 
-TVM_DLL uint32_t Custom32Sigmoid(uint32_t a) {
+TVM_DLL uint32_t Myfloat_32Sigmoid(uint32_t a) {
   // sigmoid
-  float acustom = Uint32ToCustom32<float>(a);
+  float acustom = Uint32ToMyfloat_32<float>(a);
   float one = 1.0f;
-  return Custom32ToUint32<float>(one / (one + exp(-acustom)));
+  return Myfloat_32ToUint32<float>(one / (one + exp(-acustom)));
 }
 
-TVM_DLL uint32_t Custom32Tanh(uint32_t a) {
+TVM_DLL uint32_t Myfloat_32Tanh(uint32_t a) {
   // tanh
-  float acustom = Uint32ToCustom32<float>(a);
-  return Custom32ToUint32<float>(tanh(acustom));
+  float acustom = Uint32ToMyfloat_32<float>(a);
+  return Myfloat_32ToUint32<float>(tanh(acustom));
 }
 }
