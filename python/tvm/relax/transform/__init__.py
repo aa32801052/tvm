@@ -77,6 +77,7 @@ from .transform import (
     SplitLayoutRewritePreproc,
     StaticPlanBlockMemory,
     ToMixedPrecision,
+    ToMixedPrecisionCustom,
     ToNonDataflow,
     TopologicalSort,
     UpdateParamType,

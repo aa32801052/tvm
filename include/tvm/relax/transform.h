@@ -663,6 +663,20 @@ TVM_DLL Pass ToMixedPrecision(
     DLDataType out_dtype, ffi::Optional<ffi::Array<ffi::String>> fp16_input_names = std::nullopt);
 
 /*!
+ * \brief Automatic mixed precision pass for a registered custom datatype family.
+ * \param src_dtype The source custom datatype.
+ * \param dst_dtype The lower-precision custom datatype used for computation.
+ * \param acc_dtype The custom datatype used for gemm/conv accumulation.
+ * \param dst_input_names The names of function parameters whose dtype should become dst_dtype.
+ * \return The Pass.
+ *
+ * \note Mainly operates within dataflow blocks. ConvertToDataflow may need to be called first.
+ */
+TVM_DLL Pass ToMixedPrecisionCustom(
+    DLDataType src_dtype, DLDataType dst_dtype, DLDataType acc_dtype,
+    ffi::Optional<ffi::Array<ffi::String>> dst_input_names = std::nullopt);
+
+/*!
  * \brief Rewrite a Relax module for executing with CUDA graph. This pass identifies
  * the regions that can be executed with CUDA graph and lifts them into new functions for runtime
  * graph capturing.

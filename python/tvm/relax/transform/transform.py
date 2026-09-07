@@ -1414,6 +1414,35 @@ def ToMixedPrecision(
     return _ffi_api.ToMixedPrecision(out_dtype, fp16_input_names)  # type: ignore
 
 
+def ToMixedPrecisionCustom(
+    src_dtype: str,
+    dst_dtype: str,
+    acc_dtype: str,
+    dst_input_names: list[str] | None = None,
+) -> tvm.ir.transform.Pass:
+    """Apply mixed precision within a registered custom datatype family.
+
+    Parameters
+    ----------
+    src_dtype : str
+        Source custom datatype.
+    dst_dtype : str
+        Lower-precision custom datatype used for computation.
+    acc_dtype : str
+        Custom datatype used for gemm/conv accumulation.
+    dst_input_names : Optional[List[str]]
+        Names of function parameters whose dtype should become ``dst_dtype``.
+
+    Returns
+    -------
+    ret : tvm.transform.Pass
+        The registered custom mixed precision pass.
+    """
+    return _ffi_api.ToMixedPrecisionCustom(  # type: ignore
+        src_dtype, dst_dtype, acc_dtype, dst_input_names
+    )
+
+
 def SplitCallTIRByPattern(patterns: list[PrimFunc], fcodegen: Callable) -> tvm.ir.transform.Pass:
     """Split a PrimFunc into 2 parts: the first part is a TIR PrimFunc which is
        matched with some pattern, and the second part is the rest of the original
