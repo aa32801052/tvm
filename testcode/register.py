@@ -43,7 +43,7 @@ def make_standard_profile(
     *,
     bits=(32,),
     operations=("Add", "Sub", "Mul", "Div", "Max"),
-    intrinsics=("Sqrt", "Exp", "Log", "Sigmoid", "Tanh"),
+    intrinsics=("Sqrt", "Exp", "Log", "Pow", "Sigmoid", "Tanh"),
 ):
     """Create lowering rules for the standard BYODT external-symbol convention.
 

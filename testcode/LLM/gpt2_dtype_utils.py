@@ -164,6 +164,25 @@ def register_custom_datatypes(dtypes, target="llvm"):
                 width: f"{prefix}_{width}ToFloat" for width in bits
             }
 
+            def lower_custom_cast(
+                op,
+                extern_functions=extern_functions,
+                to_float_functions=to_float_functions,
+            ):
+                src_width = op.value.ty.dtype.bits
+                dst_width = op.ty.dtype.bits
+                if src_width not in to_float_functions or dst_width not in extern_functions:
+                    raise RuntimeError(f"Missing custom cast lowering for {op.value.ty} to {op.ty}")
+                float_value = call_pure_extern(
+                    "float32", to_float_functions[src_width], op.value
+                )
+                storage_dtype = f"uint{dst_width}"
+                return call_pure_extern(
+                    storage_dtype, extern_functions[dst_width], float_value
+                )
+
+            register_op(lower_custom_cast, "Cast", target, type_name, type_name)
+
             def lower_integer_cast(op, extern_functions=extern_functions):
                 width = op.ty.dtype.bits
                 if width not in extern_functions:

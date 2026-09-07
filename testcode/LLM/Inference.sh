@@ -7,15 +7,15 @@ cd "${SCRIPT_DIR}"
 
 PYTHON_BIN="${TVM_ROOT}/.venv/bin/python"
 MODEL1="./model/GPT2_fp32.so"
-MODEL2="./model/GPT2_custom_posites2_8.so"
+MODEL2="./model/GPT2_custom_posites1_mixed_32_8.so"
 DTYPE1="float32"
-DTYPE2="custom[posites2]8"
+DTYPE2="custom[posites1]32"
 THREADS=28
 ITER=32
 PROMPT="Tell me about AI"
 TEACHER_TOKENS="13,198,198,20185,318,257,649,2214,286,2267,326,468,587,1088,329,257,890,640,13,632,318,257,2214,326,468,587,1088,329,257,890,640,11"
 DECODE_MODE="teacher"
-TAG="fp32_vs_custom"
+TAG="fp32_vs_posit8es1_mixed"
 
 export PYTHONPATH="${TVM_ROOT}/python:${TVM_ROOT}/.local/python:${SCRIPT_DIR}"
 export TVM_LIBRARY_PATH="${TVM_ROOT}/build"

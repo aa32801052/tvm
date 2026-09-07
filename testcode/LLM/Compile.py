@@ -5,7 +5,6 @@ from pathlib import Path
 
 import onnx
 import tvm
-from tvm import topi
 from tvm.relax import transform
 from tvm.relax.frontend.change_dataype import ChangeDatatype
 from tvm.relax.frontend.onnx import from_onnx
@@ -144,13 +143,21 @@ def bind_symbolic_vars_if_present(mod, bindings):
     return mod
 
 
-def compile_model(onnx_path, dtype_converter=None, use_vectorize=False):
+def compile_model(
+    onnx_path,
+    dtype_converter=None,
+    mixed_precision_config=None,
+    use_vectorize=False,
+    use_quire=False,
+):
     """Load ONNX model and apply transformations
 
     Args:
         onnx_path: Path to ONNX model
         dtype_converter: Optional function to convert data types
+        mixed_precision_config: Optional (source, destination, accumulator) dtype tuple
         use_vectorize: Whether to use vectorize optimization (for float types)
+        use_quire: Whether to replace supported Posit matmuls with Quire extern calls
     """
     mod = onnx.load_model(onnx_path)
     mod = from_onnx(mod)
@@ -159,18 +166,19 @@ def compile_model(onnx_path, dtype_converter=None, use_vectorize=False):
     if dtype_converter:
         new_main = dtype_converter(mod)
         mod = tvm.IRModule({"main": new_main})
-    # print(mod)
-    mod = tvm.relax.transform.LegalizeOps(
-        {
-            "relax.power": legalize_power,
-        }
-    )(mod)
+    if mixed_precision_config:
+        mod = transform.ToMixedPrecisionCustom(*mixed_precision_config)(mod)
+    mod = tvm.relax.transform.LegalizeOps()(mod)
     with tvm.transform.PassContext(
         opt_level=0, config={"tirx.disable_vectorize": not use_vectorize}
     ):
         # Fold constants first, then run TIR-level optimizations.
         mod = tvm.relax.transform.FoldConstant()(mod)
         mod = optimize_ir_module(mod, use_vectorize=use_vectorize)
+        if use_quire:
+            from tir_transform_matmul_to_quire import InjectQuireMatmulElem
+            mod = InjectQuireMatmulElem()(mod)
+    print(mod)
     return mod
 
 
@@ -190,53 +198,6 @@ def build_dtype_converter(input_dtype, target_dtype):
         return ChangeDatatype(input_dtype, target_dtype)(mod)["main"]
 
     return _converter
-
-
-def find_scalar_constant(bb, expr, visited=None):
-    """Find a scalar constant through simple Relax bindings."""
-
-    visited = set() if visited is None else visited
-    if isinstance(expr, tvm.relax.Var):
-        if expr in visited:
-            return None
-        visited.add(expr)
-        binding = bb.lookup_binding(expr)
-        return None if binding is None else find_scalar_constant(bb, binding, visited)
-    if isinstance(expr, tvm.relax.Constant):
-        value = expr.data.numpy()
-        return value.item() if value.size == 1 else None
-    if isinstance(expr, tvm.relax.Tuple):
-        for field in expr.fields:
-            if (value := find_scalar_constant(bb, field, visited)) is not None:
-                return value
-    if isinstance(expr, tvm.relax.Call):
-        for arg in expr.args:
-            if (value := find_scalar_constant(bb, arg, visited)) is not None:
-                return value
-    return None
-
-
-def legalize_power(bb, call):
-    """Expand positive integer powers for custom dtypes using multiplication."""
-
-    input_dtype = str(call.args[0].ty.dtype)
-    if parse_custom_dtype(input_dtype) is None:
-        return bb.call_te(topi.power, call.args[0], call.args[1])
-
-    exponent = find_scalar_constant(bb, call.args[1])
-    if exponent is None or exponent < 1 or int(exponent) != exponent:
-        raise ValueError(
-            "Custom datatype power requires a positive integer scalar exponent"
-        )
-    exponent = int(exponent)
-
-    def te_power(value):
-        result = value
-        for _ in range(1, exponent):
-            result = topi.multiply(result, value)
-        return result
-
-    return bb.call_te(te_power, call.args[0], primfunc_name_hint="power")
 
 
 def parse_args():
@@ -274,12 +235,81 @@ def parse_args():
         help="Enable vectorization optimizations (true/false)",
     )
     parser.add_argument(
+        "--use-mixed-precision",
+        type=str2bool,
+        default=False,
+        help="Enable mixed precision for a registered custom datatype (true/false)",
+    )
+    parser.add_argument(
+        "--mixed-precision-dtype",
+        type=validate_dtype_arg,
+        default=None,
+        help="Lower-precision custom dtype used for mixed-precision computation",
+    )
+    parser.add_argument(
+        "--mixed-precision-acc-dtype",
+        type=validate_dtype_arg,
+        default=None,
+        help="Custom dtype used for mixed-precision accumulation",
+    )
+    parser.add_argument(
+        "--use-quire",
+        type=str2bool,
+        default=False,
+        help="Replace supported Posit matmuls with Quire extern calls (true/false)",
+    )
+    parser.add_argument(
         "--output",
         type=str,
         default="./model/GPT2_fp32.so",
         help="Output shared library path",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.use_mixed_precision:
+        configured_dtypes = {
+            "--target-dtype": args.target_dtype,
+            "--mixed-precision-dtype": args.mixed_precision_dtype,
+            "--mixed-precision-acc-dtype": args.mixed_precision_acc_dtype,
+        }
+        missing = [name for name, dtype in configured_dtypes.items() if dtype is None]
+        if missing:
+            parser.error("required with --use-mixed-precision: " + ", ".join(missing))
+
+        parsed_dtypes = {
+            name: parse_custom_dtype(dtype) for name, dtype in configured_dtypes.items()
+        }
+        non_custom = [name for name, parsed in parsed_dtypes.items() if parsed is None]
+        if non_custom:
+            parser.error(
+                "custom mixed precision requires custom[name]bits for: "
+                + ", ".join(non_custom)
+            )
+        families = {parsed[0] for parsed in parsed_dtypes.values()}
+        if len(families) != 1:
+            parser.error("all mixed-precision dtypes must use the same custom datatype name")
+        source_bits = parsed_dtypes["--target-dtype"][1]
+        compute_bits = parsed_dtypes["--mixed-precision-dtype"][1]
+        accumulator_bits = parsed_dtypes["--mixed-precision-acc-dtype"][1]
+        if compute_bits >= source_bits:
+            parser.error(
+                "--mixed-precision-dtype must use fewer bits than --target-dtype; "
+                "--target-dtype is the full-precision custom source dtype"
+            )
+        if accumulator_bits < compute_bits:
+            parser.error(
+                "--mixed-precision-acc-dtype must use at least as many bits as "
+                "--mixed-precision-dtype"
+            )
+        if args.use_quire:
+            type_name = parsed_dtypes["--mixed-precision-dtype"][0]
+            if not type_name.startswith("posites"):
+                parser.error("Quire is only available for custom[posites<es>] datatypes")
+            if (compute_bits, accumulator_bits) not in ((8, 32), (16, 32)):
+                parser.error(
+                    "mixed-precision Quire currently supports Posit8/16 inputs "
+                    "with a Posit32 output"
+                )
+    return args
 
 
 def main():
@@ -287,27 +317,45 @@ def main():
 
     target = tvm.target.Target(args.target)
 
-    register_custom_datatypes(
-        (args.input_dtype, args.target_dtype), target=target.kind.name
-    )
+    registered_dtypes = [args.input_dtype, args.target_dtype]
+    if args.use_mixed_precision:
+        registered_dtypes.extend(
+            (args.mixed_precision_dtype, args.mixed_precision_acc_dtype)
+        )
+    register_custom_datatypes(registered_dtypes, target=target.kind.name)
 
     dtype_converter = None
     if args.target_dtype != args.input_dtype:
         dtype_converter = build_dtype_converter(args.input_dtype, args.target_dtype)
+
+    mixed_precision_config = None
+    if args.use_mixed_precision:
+        mixed_precision_config = (
+            args.target_dtype,
+            args.mixed_precision_dtype,
+            args.mixed_precision_acc_dtype,
+        )
 
     print("Compile configuration:")
     print(f"  onnx_path={args.onnx_path}")
     print(f"  target={args.target}")
     print(f"  input_dtype={args.input_dtype}")
     print(f"  target_dtype={args.target_dtype}")
+    print(f"  use_mixed_precision={args.use_mixed_precision}")
+    if mixed_precision_config:
+        print(f"  mixed_precision_dtype={args.mixed_precision_dtype}")
+        print(f"  mixed_precision_acc_dtype={args.mixed_precision_acc_dtype}")
     print(f"  use_vectorize={args.use_vectorize}")
+    print(f"  use_quire={args.use_quire}")
     print(f"  output={args.output}")
 
     compile_start = time.time()
     mod = compile_model(
         args.onnx_path,
         dtype_converter=dtype_converter,
+        mixed_precision_config=mixed_precision_config,
         use_vectorize=args.use_vectorize,
+        use_quire=args.use_quire,
     )
     compile_time = time.time() - compile_start
     print(f"IR compile time: {compile_time:.2f} seconds")
