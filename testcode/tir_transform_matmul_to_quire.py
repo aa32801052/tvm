@@ -1,5 +1,5 @@
 """
-TIR Pass: Transform standard matmul to QuireMatmulElem-based implementation
+tirx Pass: Transform standard matmul to QuireMatmulElem-based implementation
 
 This pass converts standard matmul patterns (2D, 3D, 4D) to QuireMatmul extern calls.
 
@@ -40,21 +40,21 @@ This pass converts standard matmul patterns (2D, 3D, 4D) to QuireMatmul extern c
 """
 
 import tvm
-from tvm import tir
-from tvm.tir.functor import PyStmtExprMutator
+from tvm import tirx
+from tvm.tirx.functor import PyStmtExprMutator
 import re
 
 
 _POSIT_DTYPE_RE = re.compile(r"^custom\[posites(\d+)\](\d+)(x\d+)?$")
 
 
-def get_quire_extern_symbol_from_dtype(dtype, with_offset):
-    """Return extern symbol name for a custom posit dtype.
+def get_quire_extern_symbol_from_dtype(lhs_dtype, rhs_dtype, output_dtype, with_offset):
+    """Return extern symbol name for compatible custom posit buffer dtypes.
 
     Parameters
     ----------
-    dtype : Union[str, tvm.DataType]
-        Buffer dtype to inspect.
+    lhs_dtype, rhs_dtype, output_dtype : Union[str, tvm.DataType]
+        Matmul buffer dtypes to inspect.
     with_offset : bool
         True for the 9-arg function (A/B offsets), False for 7-arg Elem variant.
 
@@ -63,24 +63,32 @@ def get_quire_extern_symbol_from_dtype(dtype, with_offset):
     Optional[str]
         Symbol name like "Posit12es1QuireMatmulElem" or None if dtype is not custom posit.
     """
-    dtype_str = str(dtype)
-    match = _POSIT_DTYPE_RE.fullmatch(dtype_str)
-    if match is None:
+    matches = [
+        _POSIT_DTYPE_RE.fullmatch(str(dtype))
+        for dtype in (lhs_dtype, rhs_dtype, output_dtype)
+    ]
+    if any(match is None or match.group(3) is not None for match in matches):
         return None
 
-    es = int(match.group(1))
-    bits = int(match.group(2))
-    suffix = "QuireMatmul" if with_offset else "QuireMatmulElem"
-    return f"Posit{bits}es{es}{suffix}"
+    lhs_es, rhs_es, output_es = (int(match.group(1)) for match in matches)
+    lhs_bits, rhs_bits, output_bits = (int(match.group(2)) for match in matches)
+    if lhs_es != rhs_es or lhs_es != output_es or lhs_bits != rhs_bits:
+        return None
+
+    if not with_offset:
+        return None
+    if (lhs_bits, output_bits) not in ((8, 32), (16, 32)):
+        return None
+    return f"Posit{lhs_bits}es{lhs_es}QuireMatmulToPosit{output_bits}"
 
 
-def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
+def transform_matmul_to_quire_elem(func: tirx.PrimFunc) -> tirx.PrimFunc:
     """
-    TIR pass that transforms standard matmul loops into QuireMatmul calls.
+    tirx pass that transforms standard matmul loops into QuireMatmul calls.
     Supports 2D, 3D, and 4D matmul patterns.
     """
 
-    @tir.functor.mutator
+    @tirx.functor.mutator
     class MatmulTransformer(PyStmtExprMutator):
         def __init__(self):
             super().__init__()
@@ -91,20 +99,20 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             # Try to match different matmul patterns
 
             # All matmul patterns start with at least 2 nested For loops
-            if not isinstance(node.body, tir.For):
+            if not isinstance(node.body, tirx.For):
                 return super().visit_for_(node)
 
             loop1 = node  # Outermost loop
             loop2 = node.body  # Second loop
 
-            if not isinstance(loop2.body, tir.For):
+            if not isinstance(loop2.body, tirx.For):
                 return super().visit_for_(node)
 
             loop3 = loop2.body  # Third loop
 
             # Pattern 1: 2D matmul (3 nested loops)
             # for i1 (parallel) -> for i0 (unroll) -> for k (serial) -> BlockRealize
-            if isinstance(loop3.body, tir.BlockRealize):
+            if isinstance(loop3.body, tirx.SBlockRealize):
                 block_realize = loop3.body
                 block = block_realize.block
 
@@ -115,11 +123,11 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             # Pattern 2 & 3: 3D or 4D matmul (4+ nested loops)
             # for outer -> for middle -> for i1 -> for k -> BlockRealize (3D)
             # for outer -> for middle -> for i0 -> for i2 -> for k -> BlockRealize (4D)
-            if isinstance(loop3.body, tir.For):
+            if isinstance(loop3.body, tirx.For):
                 loop4 = loop3.body  # Fourth loop
 
                 # Check for 3D (4 loops total)
-                if isinstance(loop4.body, tir.BlockRealize):
+                if isinstance(loop4.body, tirx.SBlockRealize):
                     block_realize = loop4.body
                     block = block_realize.block
 
@@ -128,10 +136,10 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
                         return self.transform_3d_matmul(loop1, loop2, loop3, loop4, block_realize, block)
 
                 # Check for 4D (5 loops total)
-                if isinstance(loop4.body, tir.For):
+                if isinstance(loop4.body, tirx.For):
                     loop5 = loop4.body  # Fifth loop
 
-                    if isinstance(loop5.body, tir.BlockRealize):
+                    if isinstance(loop5.body, tirx.SBlockRealize):
                         block_realize = loop5.body
                         block = block_realize.block
 
@@ -154,23 +162,26 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             # Must have exactly one reduction axis (the last one)
             reduction_count = sum(
                 1 for iv in block.iter_vars
-                if iv.iter_type == tir.IterVar.CommReduce
+                if iv.iter_type == tirx.IterVar.CommReduce
             )
             if reduction_count != 1:
                 return False
 
             # The last iter var must be the reduction axis
-            if block.iter_vars[-1].iter_type != tir.IterVar.CommReduce:
+            if block.iter_vars[-1].iter_type != tirx.IterVar.CommReduce:
                 return False
 
             # Check for multiply-add pattern in BufferStore
-            if not isinstance(block.body, tir.BufferStore):
+            if not isinstance(block.body, tirx.BufferStore):
                 return False
 
             store = block.body
-            if isinstance(store.value, tir.Add):
+            if isinstance(store.value, tirx.Add):
                 add = store.value
-                if isinstance(add.b, tir.Mul):
+                product = add.b
+                if isinstance(product, tirx.Cast):
+                    product = product.value
+                if isinstance(product, tirx.Mul):
                     # Additional check: ensure reads contain BufferLoad (not Call nodes)
                     # Matmul blocks should have buffer reads, not extern calls
                     if len(block.reads) >= 2:
@@ -197,16 +208,18 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             A_buffer = block.reads[0].buffer
             B_buffer = block.reads[1].buffer
 
-            extern_symbol = get_quire_extern_symbol_from_dtype(C_buffer.dtype, with_offset=True)
+            extern_symbol = get_quire_extern_symbol_from_dtype(
+                A_buffer.dtype, B_buffer.dtype, C_buffer.dtype, with_offset=True
+            )
             if extern_symbol is None:
                 return i1_loop
 
             # Create extern call
             offset_C = i0_var * N + i1_var
             offset_A = i0_var * K
-            offset_B = tir.const(0, "int64")
-            extern_call = tir.Evaluate(
-                tir.call_extern(
+            offset_B = tirx.const(0, "int64")
+            extern_call = tirx.Evaluate(
+                tirx.call_extern(
                     "int32",
                     extern_symbol,
                     A_buffer.data,
@@ -222,7 +235,7 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             )
 
             # Create new i0 loop with extern call (no k loop)
-            new_i0_loop = tir.For(
+            new_i0_loop = tirx.For(
                 i0_loop.loop_var,
                 i0_loop.min,
                 i0_loop.extent,
@@ -233,7 +246,7 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             )
 
             # Create new i1 loop
-            new_i1_loop = tir.For(
+            new_i1_loop = tirx.For(
                 i1_loop.loop_var,
                 i1_loop.min,
                 i1_loop.extent,
@@ -269,7 +282,9 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             A_buffer = block.reads[0].buffer
             B_buffer = block.reads[1].buffer
 
-            extern_symbol = get_quire_extern_symbol_from_dtype(C_buffer.dtype, with_offset=True)
+            extern_symbol = get_quire_extern_symbol_from_dtype(
+                A_buffer.dtype, B_buffer.dtype, C_buffer.dtype, with_offset=True
+            )
             if extern_symbol is None:
                 return i2_loop
 
@@ -281,11 +296,11 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             offset_A = i0_var * M_extent * K_extent + i1_var * K_extent
 
             # B offset is 0 for 3D matmul (B is still 2D)
-            offset_B = tir.const(0, "int64")
+            offset_B = tirx.const(0, "int64")
 
             # Create QuireMatmulElemWithOffset extern call
-            extern_call = tir.Evaluate(
-                tir.call_extern(
+            extern_call = tirx.Evaluate(
+                tirx.call_extern(
                     "int32",
                     extern_symbol,
                     A_buffer.data,
@@ -301,7 +316,7 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             )
 
             # Create new i1 loop (M dimension) - replace k_loop with extern call
-            new_i1_loop = tir.For(
+            new_i1_loop = tirx.For(
                 i1_loop.loop_var,
                 i1_loop.min,
                 i1_loop.extent,
@@ -312,7 +327,7 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             )
 
             # Create new i0 loop (batch)
-            new_i0_loop = tir.For(
+            new_i0_loop = tirx.For(
                 i0_loop.loop_var,
                 i0_loop.min,
                 i0_loop.extent,
@@ -323,7 +338,7 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             )
 
             # Create new i2 loop (N)
-            new_i2_loop = tir.For(
+            new_i2_loop = tirx.For(
                 i2_loop.loop_var,
                 i2_loop.min,
                 i2_loop.extent,
@@ -361,7 +376,9 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             A_buffer = block.reads[0].buffer
             B_buffer = block.reads[1].buffer
 
-            extern_symbol = get_quire_extern_symbol_from_dtype(C_buffer.dtype, with_offset=True)
+            extern_symbol = get_quire_extern_symbol_from_dtype(
+                A_buffer.dtype, B_buffer.dtype, C_buffer.dtype, with_offset=True
+            )
             if extern_symbol is None:
                 return i3_loop
 
@@ -376,8 +393,8 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             offset_B = i0_var * H * K_extent * N + i1_var * K_extent * N
 
             # Create QuireMatmulElemWithOffset extern call
-            extern_call = tir.Evaluate(
-                tir.call_extern(
+            extern_call = tirx.Evaluate(
+                tirx.call_extern(
                     "int32",
                     extern_symbol,
                     A_buffer.data,
@@ -393,7 +410,7 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             )
 
             # Create new i2 loop (M dimension) - replace k_loop with extern call
-            new_i2_loop = tir.For(
+            new_i2_loop = tirx.For(
                 i2_loop.loop_var,
                 i2_loop.min,
                 i2_loop.extent,
@@ -404,7 +421,7 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             )
 
             # Create new i0 loop (B/batch dimension)
-            new_i0_loop = tir.For(
+            new_i0_loop = tirx.For(
                 i0_loop.loop_var,
                 i0_loop.min,
                 i0_loop.extent,
@@ -415,7 +432,7 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             )
 
             # Create new i1 loop (H/heads)
-            new_i1_loop = tir.For(
+            new_i1_loop = tirx.For(
                 i1_loop.loop_var,
                 i1_loop.min,
                 i1_loop.extent,
@@ -426,7 +443,7 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             )
 
             # Create new i3 loop (N)
-            new_i3_loop = tir.For(
+            new_i3_loop = tirx.For(
                 i3_loop.loop_var,
                 i3_loop.min,
                 i3_loop.extent,
@@ -444,11 +461,11 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
 
     # Handle root block if present
     body = func.body
-    if isinstance(body, tir.BlockRealize) and body.block.name_hint == "root":
+    if isinstance(body, tirx.SBlockRealize) and body.block.name_hint == "root":
         # Visit the body of the root block
         new_body = transformer.visit_stmt(body.block.body)
         # Reconstruct root block with transformed body
-        new_root_block = tir.Block(
+        new_root_block = tirx.SBlock(
             iter_vars=body.block.iter_vars,
             reads=body.block.reads,
             writes=body.block.writes,
@@ -459,7 +476,7 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
             match_buffers=body.block.match_buffers,
             annotations=body.block.annotations
         )
-        new_body = tir.BlockRealize(
+        new_body = tirx.SBlockRealize(
             iter_values=body.iter_values,
             predicate=body.predicate,
             block=new_root_block
@@ -469,20 +486,14 @@ def transform_matmul_to_quire_elem(func: tir.PrimFunc) -> tir.PrimFunc:
 
     if transformer.transformed:
         # Create new function with transformed body
-        new_func = tir.PrimFunc(
-            params=func.params,
-            body=new_body,
-            ret_type=func.ret_type,
-            buffer_map=func.buffer_map,
-            attrs=func.attrs
-        )
-        # Add tir.noalias attribute
-        return new_func.with_attr("tir.noalias", True)
+        new_func = func.with_body(new_body)
+        # Add tirx.noalias attribute
+        return new_func.with_attr("tirx.noalias", True)
     else:
         return func
 
 
-@tvm.tir.transform.prim_func_pass(opt_level=0)
+@tvm.tirx.transform.prim_func_pass(opt_level=0)
 class InjectQuireMatmulElem:
     """
     TVM pass to transform matmul operations to use QuireMatmulElem extern calls
